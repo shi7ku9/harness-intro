@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# grok-intro — Reveal Grok's native ring and slash before launching Grok Build.
+# Any key skips; Ctrl-C cancels. GROK_NO_INTRO=1 disables playback;
+# GROK_INTRO_SPEED=2 doubles playback speed. No image protocol is required.
+
+[[ -t 0 && -t 1 && -z ${GROK_NO_INTRO:-} ]] || exit 0
+[[ -n ${TERM:-} && $TERM != dumb ]] || exit 0
+intro_locale=${LC_ALL:-${LC_CTYPE:-${LANG:-}}}
+[[ ${intro_locale,,} == *utf*8* ]] || exit 0
+
+measure_stage() {
+  read -r ROWS COLS < <(stty size 2>/dev/null)
+  [[ $ROWS =~ ^[0-9]+$ && $COLS =~ ^[0-9]+$ ]] || return 1
+  (( ROWS >= 14 && COLS >= 30 ))
+}
+measure_stage || exit 0
+
+RESET=$'\e[0m'
+BOLD=$'\e[1m'
+if [[ -n ${NO_COLOR:-} ]]; then
+  WHITE=$'\e[39m'
+  SOFT=$'\e[39m'
+  BRIGHT=$'\e[1;39m'
+  DIM=$'\e[2;39m'
+elif [[ ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit ]]; then
+  WHITE=$'\e[38;2;232;232;232m'
+  SOFT=$'\e[38;2;184;184;184m'
+  BRIGHT=$'\e[38;2;255;255;255m'
+  DIM=$'\e[38;2;138;138;138m'
+else
+  WHITE=$'\e[38;5;254m'
+  SOFT=$'\e[38;5;250m'
+  BRIGHT=$'\e[38;5;255m'
+  DIM=$'\e[38;5;245m'
+fi
+
+SPEED=${GROK_INTRO_SPEED:-1}
+[[ $SPEED =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || SPEED=1
+read -r FRAME_DELAY PULSE_DELAY TYPE_DELAY HOLD_DELAY < <(
+  LC_ALL=C awk -v speed="$SPEED" 'BEGIN {
+    if (!(speed > 0)) speed = 1
+    split("0.025 0.09 0.025 0.38", delay)
+    for (i = 1; i <= 4; i++) {
+      t = delay[i] / speed
+      printf "%.4f%s", (t < 0.001 ? 0.001 : t), (i == 4 ? "\n" : " ")
+    }
+  }'
+)
+[[ -n $HOLD_DELAY ]] || exit 0
+
+# Exact 14x7 Braille mark embedded in Grok 1.0.77 (50ca579fa996).
+# Preserve U+2800 blanks and every dot, including the shared ring/slash cell.
+ART=(
+  '⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄'
+  '⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀'
+  '⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀'
+  '⠀⠀⣿⡇⠀⠀⠀⠔⠁⠀⠀⣿⡇⠀'
+  '⠀⠀⢹⣷⠀⠀⠀⠀⠀⢀⣴⡿⠀⠀'
+  '⠀⢀⠞⠁⠠⢶⣶⣶⣶⠿⠋⠀⠀⠀'
+  '⠐⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀'
+)
+# A subset of ART's dots. The remaining dots form the ring.
+SLASH=(
+  '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠄'
+  '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡴⠁⠀'
+  '⠀⠀⠀⠀⠀⠀⠀⠀⢀⡴⠋⠀⠀⠀'
+  '⠀⠀⠀⠀⠀⠀⠀⠔⠁⠀⠀⠀⠀⠀'
+  '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀'
+  '⠀⢀⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀'
+  '⠐⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀'
+)
+ART_WIDTH=14
+ART_HEIGHT=7
+TITLE='Grok Build'
+HINT='press any key to skip'
+ORIGINAL_SUB=$PWD
+[[ $ORIGINAL_SUB == "$HOME" ]] && ORIGINAL_SUB='~'
+[[ $ORIGINAL_SUB == "$HOME/"* ]] && ORIGINAL_SUB="~/${ORIGINAL_SUB#"$HOME/"}"
+ORIGINAL_SUB=${ORIGINAL_SUB//[[:cntrl:]]/}
+
+OLD_STTY=$(stty -g 2>/dev/null) || exit 0
+screen_active=0
+resize_pending=0
+cleanup() {
+  stty "$OLD_STTY" 2>/dev/null
+  (( screen_active )) && printf '%s' $'\e[?2026l\e[0m\e[?25h\e[?1049l'
+  return 0
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'resize_pending=1' WINCH
+
+prepare_animation() {
+  local row col bit idx mask slash_mask phase stage value glyph color last_color line
+  local -a dot_phases reveals masks glyphs
+  # Braille bit order: left 0,1,2,6; right 3,4,5,7. The native ring's
+  # center is (14,12.5) in its 28x28 dot grid. Start at twelve o'clock.
+  mapfile -t dot_phases < <(LC_ALL=C awk 'BEGIN {
+    split("0 0 0 1 1 1 0 1", dx)
+    split("0 1 2 0 1 2 3 3", dy)
+    pi = atan2(0, -1)
+    for (r = 0; r < 7; r++) for (c = 0; c < 14; c++) {
+      for (b = 1; b <= 8; b++) {
+        x = c * 2 + dx[b]; y = r * 4 + dy[b]
+        angle = atan2(x - 14, 12.5 - y)
+        if (angle < 0) angle += 2 * pi
+        printf "%d %d\n", int(angle / (2 * pi) * 24), 24 + int((25 - y) * 11 / 23)
+      }
+    }
+  }')
+  (( ${#dot_phases[@]} == 784 )) || return 1
+  for (( value = 0; value < 256; value++ )); do
+    printf -v glyph '\\u%04x' "$((0x2800 + value))"
+    printf -v 'glyphs[value]' '%b' "$glyph"
+  done
+  for (( row = 0; row < ART_HEIGHT; row++ )); do
+    for (( col = 0; col < ART_WIDTH; col++ )); do
+      idx=$(( row * ART_WIDTH + col ))
+      printf -v mask '%d' "'${ART[row]:col:1}"
+      printf -v slash_mask '%d' "'${SLASH[row]:col:1}"
+      (( mask -= 0x2800, slash_mask -= 0x2800 ))
+      for (( bit = 0; bit < 8; bit++ )); do
+        (( mask & (1 << bit) )) || continue
+        if (( slash_mask & (1 << bit) )); then
+          phase=${dot_phases[idx * 8 + bit]#* }
+        else
+          phase=${dot_phases[idx * 8 + bit]% *}
+        fi
+        value=$(( phase * 98 + idx ))
+        reveals[value]=$(( ${reveals[value]:-0} | (1 << bit) ))
+      done
+    done
+  done
+  # Precompute dot masks and colors once. Playback only positions seven rows;
+  # resizing reuses these frames without rerunning awk or rebuilding glyphs.
+  FRAME_ROWS=()
+  for (( stage = 0; stage < 36; stage++ )); do
+    for (( row = 0; row < ART_HEIGHT; row++ )); do
+      line=''; last_color=''
+      for (( col = 0; col < ART_WIDTH; col++ )); do
+        idx=$(( row * ART_WIDTH + col ))
+        value=${reveals[stage * 98 + idx]:-0}
+        masks[idx]=$(( ${masks[idx]:-0} | value ))
+        color=$SOFT
+        (( value )) && color=$WHITE
+        if [[ $color != "$last_color" ]]; then
+          line+=$color
+          last_color=$color
+        fi
+        line+=${glyphs[masks[idx]]}
+      done
+      FRAME_ROWS+=("$line$RESET")
+    done
+  done
+}
+prepare_animation || exit 0
+
+prepare_layout() {
+  # Seven logo rows, a gap, title, directory, a gap, and skip hint: 12 rows.
+  BASE=$(( (ROWS - 12) / 2 + 1 ))
+  LEFT=$(( (COLS - ART_WIDTH) / 2 + 1 ))
+  TITLE_ROW=$(( BASE + 8 ))
+  TITLE_COL=$(( (COLS - ${#TITLE}) / 2 + 1 ))
+  HINT_ROW=$(( BASE + 11 ))
+  HINT_COL=$(( (COLS - ${#HINT}) / 2 + 1 ))
+  SUB=$ORIGINAL_SUB
+  SUB_WIDTH=$(printf '%s' "$SUB" | wc -L)
+  if (( SUB_WIDTH > COLS - 6 )); then
+    SUB=${SUB: -$(( COLS - 7 ))}
+    while (( $(printf '%s' "$SUB" | wc -L) > COLS - 7 )); do
+      SUB=${SUB:1}
+    done
+    SUB="…$SUB"
+    SUB_WIDTH=$(printf '%s' "$SUB" | wc -L)
+  fi
+  SUB_COL=$(( (COLS - SUB_WIDTH) / 2 + 1 ))
+}
+
+current_stage=0
+current_color=''
+title_length=0
+sub_visible=0
+
+append_logo() {
+  local row position
+  for (( row = 0; row < ART_HEIGHT; row++ )); do
+    printf -v position '\e[%d;%dH' "$((BASE + row))" "$LEFT"
+    if [[ -n $current_color ]]; then
+      FRAME_BUF+="$position$RESET$current_color${ART[row]}$RESET"
+    else
+      FRAME_BUF+="$position${FRAME_ROWS[current_stage * ART_HEIGHT + row]}"
+    fi
+  done
+}
+
+refresh_layout() {
+  local position
+  while :; do
+    resize_pending=0
+    measure_stage || exit 0
+    prepare_layout
+    (( resize_pending )) || break
+  done
+  FRAME_BUF=$'\e[?2026h\e[2J'
+  printf -v position '\e[%d;%dH' "$HINT_ROW" "$HINT_COL"
+  FRAME_BUF+="$position$DIM$HINT$RESET"
+  if (( title_length )); then
+    printf -v position '\e[%d;%dH' "$TITLE_ROW" "$TITLE_COL"
+    FRAME_BUF+="$position$BOLD$WHITE${TITLE:0:title_length}$RESET"
+  fi
+  if (( sub_visible )); then
+    printf -v position '\e[%d;%dH' "$((TITLE_ROW + 1))" "$SUB_COL"
+    FRAME_BUF+="$position$DIM$SUB$RESET"
+  fi
+  append_logo
+  printf '%s' "$FRAME_BUF"$'\e[?2026l'
+}
+
+draw_logo() {
+  if (( resize_pending )); then
+    refresh_layout
+  else
+    FRAME_BUF=$'\e[?2026h'
+    append_logo
+    printf '%s' "$FRAME_BUF"$'\e[?2026l'
+  fi
+}
+
+pause() {
+  local key prefix rest i
+  if IFS= read -rsn1 -t "$1" key; then
+    # Consume the rest of a navigation-key sequence before handing off to Grok.
+    if [[ $key == $'\e' ]]; then
+      if IFS= read -rsn1 -t 0.008 prefix && [[ $prefix == '[' || $prefix == O ]]; then
+        for (( i = 0; i < 16; i++ )); do
+          IFS= read -rsn1 -t 0.008 rest || break
+          [[ $rest == [a-zA-Z~] ]] && break
+        done
+      fi
+    fi
+    exit 0
+  fi
+  (( resize_pending )) && refresh_layout
+  return 0
+}
+
+stty -echo -icanon min 1 time 0 2>/dev/null || exit 0
+screen_active=1
+printf '%s' $'\e[?1049h\e[?25l\e[2J'
+refresh_layout
+
+# 0.60s clockwise ring, then 0.30s slash from lower left to upper right.
+for (( current_stage = 0; current_stage < 36; current_stage++ )); do
+  draw_logo
+  pause "$FRAME_DELAY"
+done
+current_stage=35
+
+for current_color in "$WHITE" "$BRIGHT" "$WHITE"; do
+  draw_logo
+  pause "$PULSE_DELAY"
+done
+
+for (( title_length = 1; title_length <= ${#TITLE}; title_length++ )); do
+  (( resize_pending )) && refresh_layout
+  printf '\e[%d;%dH%s%s%s' "$TITLE_ROW" "$TITLE_COL" "$BOLD$WHITE" "${TITLE:0:title_length}" "$RESET"
+  pause "$TYPE_DELAY"
+done
+title_length=${#TITLE}
+
+sub_visible=1
+(( resize_pending )) && refresh_layout
+printf '\e[%d;%dH%s%s%s' "$((TITLE_ROW + 1))" "$SUB_COL" "$DIM" "$SUB" "$RESET"
+pause "$HOLD_DELAY"
+exit 0
