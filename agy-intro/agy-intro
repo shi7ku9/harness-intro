@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agy-intro — Play the levitating-delta animation before starting Antigravity CLI.
+# agy-intro — Play the Antigravity icon animation before starting Antigravity CLI.
 #   Press any key to skip; Ctrl-C cancels startup.
 #   AGY_NO_INTRO=1 disables the animation; AGY_INTRO_SPEED=2 plays at 2x speed.
 #   Uses Unicode Braille art; no image protocol required.
@@ -17,26 +17,23 @@ RESET=$'\e[0m'
 BOLD=$'\e[1m'
 if [[ -n ${NO_COLOR:-} ]]; then
   WHITE=$'\e[39m'
-  CYAN=$'\e[39m'
-  SOFT=$'\e[39m'
   DIM=$'\e[2m'
+  COLOR_MODE=none
 elif [[ ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit ]]; then
   WHITE=$'\e[38;2;232;240;254m'
-  CYAN=$'\e[38;2;90;200;250m'
-  SOFT=$'\e[38;2;138;180;248m'
   DIM=$'\e[38;2;134;144;162m'
+  COLOR_MODE=truecolor
 else
   WHITE=$'\e[38;5;255m'
-  CYAN=$'\e[38;5;75m'
-  SOFT=$'\e[38;5;111m'
   DIM=$'\e[38;5;245m'
+  COLOR_MODE=256
 fi
 
 SPEED=${AGY_INTRO_SPEED:-1}
 [[ $SPEED =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || SPEED=1
 
 # Precompute all frame delays once to avoid spawning awk on every frame.
-read -r FRAME_DELAY HOVER_DELAY TYPE_DELAY HOLD_DELAY < <(
+read -r FRAME_DELAY SETTLE_DELAY TYPE_DELAY HOLD_DELAY < <(
   LC_ALL=C awk -v speed="$SPEED" 'BEGIN {
     if (!(speed > 0)) speed = 1
     split("0.032 0.11 0.025 0.48", delay)
@@ -49,39 +46,124 @@ read -r FRAME_DELAY HOVER_DELAY TYPE_DELAY HOLD_DELAY < <(
 [[ -n $HOLD_DELAY ]] || exit 0
 
 ART=(
-  '            ⢀⣀⣀⡀            '
-  '           ⢀⣾⣿⣿⣷⡀           '
-  '          ⢀⣾⣿⣿⣿⣿⣷⡀          '
-  '         ⢀⣾⣿⣿⣿⣿⣿⣿⣷⡀         '
-  '        ⢀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀        '
-  '        ⣼⣿⣿⣿⡿⠁⠈⢿⣿⣿⣿⣧        '
-  '       ⣼⣿⣿⣿⣿⠃⣀⣀⠘⣿⣿⣿⣿⣧       '
-  '      ⣸⣿⣿⣿⣿⠃⣾⣿⣿⣷⠘⣿⣿⣿⣿⣇      '
-  '     ⣰⣿⣿⣿⣿⠇ ⣿⣿⣿⣿ ⠸⣿⣿⣿⣿⣆     '
-  '    ⢠⣿⣿⣿⣿⡏  ⠈⠛⠛⠁  ⢹⣿⣿⣿⣿⡄    '
-  '   ⢠⣿⣿⣿⣿⡿          ⢿⣿⣿⣿⣿⡄   '
-  '  ⢀⣾⣿⣿⣿⣿⠁          ⠈⣿⣿⣿⣿⣷⡀  '
-  '  ⣾⣿⣿⣿⣿⠇            ⠸⣿⣿⣿⣿⣷  '
+  '                            '
+  '          ⢀⣴⣾⣿⣿⣷⣦⡀          '
+  '         ⣰⣿⣿⣿⣿⣿⣿⣿⣿⣆         '
+  '        ⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣆        '
+  '       ⢀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡀       '
+  '       ⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧       '
+  '      ⢠⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡆      '
+  '      ⣼⣿⣿⣿⣿⡿⠟⠛⠛⠻⢿⣿⣿⣿⣿⣷      '
+  '     ⢰⣿⣿⣿⡿⠋      ⠈⢿⣿⣿⣿⣇     '
+  '    ⢀⣿⣿⣿⡟⠁         ⢻⣿⣿⣿⡄    '
+  '   ⢀⣾⣿⣿⠟            ⠹⣿⣿⣿⡄   '
+  '  ⣠⣿⣿⡿⠋              ⠘⢿⣿⣿⣆  '
+  ' ⢾⣿⠿⠋                  ⠙⠻⣿⡷ '
   '                            '
 )
 
-# Reveal phases a-x sweep upward from base to apex and ignite the inner core.
-PHASES=(
-  '            uuuu            '
-  '           tsssst           '
-  '          rrrrrrrr          '
-  '         qppppppppq         '
-  '        oooonnnnoooo        '
-  '        mmmmmmmmmmmm        '
-  '       lllkvvuuvvklll       '
-  '      jjjjjuuttuujjjjj      '
-  '     iiihhh tsst hhhiii     '
-  '    gggggg  srrs  gggggg    '
-  '   fffeee          eeefff   '
-  '  ddddddc          cdddddd  '
-  '  ccbbbb            bbbbcc  '
+# Palette keys matching the Antigravity icon gradient (blue legs -> green/violet slopes -> orange/coral apex).
+COLORS=(
+  '                            '
+  '          31024577          '
+  '         9668acdb77         '
+  '        ffhhmonkigee        '
+  '       llqruzzAxtspjj       '
+  '       rrwCEIIGGFDyvs       '
+  '      wwCEIKKKKKJGFDBB      '
+  '      CEIKKKKKKKKJJJHH      '
+  '     EIIKKK      KKJJJJ     '
+  '    IIKKKK         KKJJJ    '
+  '   KKKKK            KKKKK   '
+  '  KKKKK              KKKKK  '
+  ' KKKK                  KKKK '
   '                            '
 )
+
+# Reveal phases a-x sweep upward from both legs, bridge the arch, and ignite the apex.
+PHASES=(
+  '                            '
+  '          wxxxxxxw          '
+  '         uvvvvvvvvu         '
+  '        ssttttttttss        '
+  '       qqrrrrrrrrrrqq       '
+  '       oppppppppppppo       '
+  '      mmnnnnnoonnnnnmm      '
+  '      kllllllmmllllllk      '
+  '     iijjjj      jjjjii     '
+  '    gghhhh         hhhgg    '
+  '   eefff            fffee   '
+  '  cccdd              ddccc  '
+  ' aaab                  baaa '
+  '                            '
+)
+
+declare -A COLOR_MAP GLOW_MAP
+while read -r key r g b gr gg gb c256 g256; do
+  [[ -z $key ]] && continue
+  case $COLOR_MODE in
+    none)
+      COLOR_MAP[$key]=$'\e[39m'
+      GLOW_MAP[$key]=$'\e[39m'
+      ;;
+    truecolor)
+      COLOR_MAP[$key]=$'\e[38;2;'"$r;$g;$b"'m'
+      GLOW_MAP[$key]=$'\e[38;2;'"$gr;$gg;$gb"'m'
+      ;;
+    256)
+      COLOR_MAP[$key]=$'\e[38;5;'"$c256"'m'
+      GLOW_MAP[$key]=$'\e[38;5;'"$g256"'m'
+      ;;
+  esac
+done <<'EOF'
+0 236 159 36 243 193 113 214 215
+1 228 175 37 237 203 113 178 221
+2 240 140 40 245 180 115 208 215
+3 213 186 44 228 210 118 178 186
+4 241 123 46 246 169 119 208 216
+5 243 107 51 247 159 122 203 216
+6 186 182 62 210 208 130 143 186
+7 240 88 63 245 146 130 203 210
+8 195 160 66 216 193 132 143 180
+9 167 195 68 198 216 133 143 186
+a 202 144 70 221 183 135 173 180
+b 229 99 70 238 154 135 167 210
+c 210 128 72 226 172 136 173 180
+d 220 113 72 232 163 136 167 180
+e 222 84 87 234 144 146 167 174
+f 125 193 94 170 215 150 107 150
+g 207 95 98 224 151 153 167 174
+h 121 174 106 168 202 158 107 151
+i 190 106 110 213 158 161 131 181
+j 198 92 120 218 149 167 168 175
+k 171 118 121 200 166 168 138 181
+l 90 186 122 148 210 169 72 115
+m 127 156 122 172 191 169 108 249
+n 154 130 127 189 174 172 245 249
+o 138 143 128 179 182 172 102 249
+p 181 97 133 207 152 176 132 175
+q 81 177 136 142 204 178 72 115
+r 71 171 155 135 200 190 72 115
+s 164 106 155 196 158 190 132 249
+t 137 114 168 178 163 198 97 146
+u 70 158 169 135 192 199 73 110
+v 154 109 169 189 160 199 97 146
+w 56 161 182 126 194 208 73 110
+x 115 122 182 164 169 208 67 146
+y 133 114 186 176 163 210 97 146
+z 78 144 187 140 183 211 67 110
+A 97 131 190 152 174 213 67 110
+B 132 124 202 175 170 221 104 146
+C 51 152 204 122 188 222 68 110
+D 112 122 208 162 169 224 68 146
+E 48 146 220 120 184 232 68 110
+F 94 126 221 150 171 233 68 110
+G 75 130 231 138 174 239 68 111
+H 100 135 233 154 177 241 68 111
+I 48 140 234 120 180 241 68 111
+J 72 137 249 136 178 251 69 111
+K 51 135 252 122 177 253 69 111
+EOF
 
 BASE=$(( (ROWS - 19) / 2 + 1 ))
 LEFT=$(( (COLS - 28) / 2 + 1 ))
@@ -112,32 +194,47 @@ for (( i = 0; i < 24; i++ )); do
   phase_index[${alphabet:i:1}]=$i
 done
 
-# Pre-render each frame so playback emits one write per frame without flicker.
-FRAMES=()
-for (( stage = 0; stage < 24; stage++ )); do
-  frame=$'\e[?2026h'
+# build_frame <base_row> <stage> <mode>
+# Populates FRAME_BUF; mode is sweep (luminous edge) or rest (true gradient).
+build_frame() {
+  local base_row=$1 stage=$2 mode=$3
+  local row col position last_color glyph phase ckey color out=$'\e[?2026h'
+
   for (( row = 0; row < 14; row++ )); do
-    printf -v position '\e[%d;%dH' "$((BASE + row))" "$LEFT"
-    frame+=$position
+    printf -v position '\e[%d;%dH' "$((base_row + row))" "$LEFT"
+    out+=$position
     last_color=''
     for (( col = 0; col < 28; col++ )); do
       glyph=${ART[row]:col:1}
       phase=${PHASES[row]:col:1}
-      if [[ $phase == ' ' ]] || (( phase_index[$phase] > stage )); then
-        frame+=' '
+      if [[ $phase == ' ' ]] || (( stage >= 0 && phase_index[$phase] > stage )); then
+        out+=' '
       else
-        color=$WHITE
-        (( stage - phase_index[$phase] < 4 )) && color=$CYAN
+        ckey=${COLORS[row]:col:1}
+        if [[ $mode == sweep && $(( stage - phase_index[$phase] )) -lt 3 ]]; then
+          color=${GLOW_MAP[$ckey]:-$WHITE}
+        else
+          color=${COLOR_MAP[$ckey]:-$WHITE}
+        fi
         if [[ $color != "$last_color" ]]; then
-          frame+=$color
+          out+=$color
           last_color=$color
         fi
-        frame+=$glyph
+        out+=$glyph
       fi
     done
   done
-  FRAMES+=("$frame$RESET"$'\e[?2026l')
+  FRAME_BUF="$out$RESET"$'\e[?2026l'
+}
+
+# Pre-render all frames so playback emits one write per frame without flicker.
+FRAMES=()
+for (( stage = 0; stage < 24; stage++ )); do
+  build_frame "$BASE" "$stage" sweep
+  FRAMES+=("$FRAME_BUF")
 done
+build_frame "$BASE" -1 rest
+REST_FRAME=$FRAME_BUF
 
 OLD_STTY=$(stty -g 2>/dev/null) || exit 0
 screen_active=0
@@ -172,31 +269,15 @@ pause() {
   fi
 }
 
-draw_at() {
-  local base_row=$1 color=$2 row out=$'\e[?2026h' position
-  # Clear one row above and below the 14-row canvas so vertical hover leaves no trails.
-  for row in $((BASE - 1)) $((BASE + 13)); do
-    printf -v position '\e[%d;%dH\e[2K' "$row" 1
-    out+=$position
-  done
-  for (( row = 0; row < 14; row++ )); do
-    printf -v position '\e[%d;%dH' "$((base_row + row))" "$LEFT"
-    out+="$position$color${ART[row]}"
-  done
-  printf '%s' "$out$RESET"$'\e[?2026l'
-}
-
 printf '\e[%d;%dH%s%s%s' "$(( BASE + 18 ))" "$(( (COLS - ${#HINT}) / 2 + 1 ))" "$DIM" "$HINT" "$RESET"
 for frame in "${FRAMES[@]}"; do
   printf '%s' "$frame"
   pause "$FRAME_DELAY"
 done
 
-# Brief weightless hover upward and settle back into rest.
-draw_at "$((BASE - 1))" "$SOFT"
-pause "$HOVER_DELAY"
-draw_at "$BASE" "$WHITE"
-pause "$HOVER_DELAY"
+# Settle the luminous sweep edge into the true gradient in place.
+printf '%s' "$REST_FRAME"
+pause "$SETTLE_DELAY"
 
 for (( i = 1; i <= ${#TITLE}; i++ )); do
   printf '\e[%d;%dH%s%s%s' "$TITLE_ROW" "$TITLE_COL" "$BOLD$WHITE" "${TITLE:0:i}" "$RESET"
