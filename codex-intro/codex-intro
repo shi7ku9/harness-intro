@@ -9,9 +9,19 @@
 intro_locale=${LC_ALL:-${LC_CTYPE:-${LANG:-}}}
 [[ ${intro_locale,,} == *utf*8* ]] || exit 0
 
-read -r ROWS COLS < <(stty size 2>/dev/null)
-[[ $ROWS =~ ^[0-9]+$ && $COLS =~ ^[0-9]+$ ]] || exit 0
-(( ROWS >= 21 && COLS >= 36 )) || exit 0
+# Codex 0.167.2 centers a 60x21 stage in the whole terminal, reserving
+# three header rows and six composer/footer rows. Narrow windows scale
+# by width only; a stage that cannot fit is hidden rather than clipped.
+measure_stage() {
+  read -r ROWS COLS < <(stty size 2>/dev/null)
+  [[ $ROWS =~ ^[0-9]+$ && $COLS =~ ^[0-9]+$ ]] || return 1
+  STAGE_WIDTH=$(( COLS < 64 ? COLS - 4 : 60 ))
+  STAGE_HEIGHT=$(( STAGE_WIDTH * 21 / 60 ))
+  STAGE_TOP=$(( (ROWS - STAGE_HEIGHT) / 2 ))
+  (( STAGE_HEIGHT >= 14 && STAGE_TOP >= 3 &&
+     STAGE_TOP + STAGE_HEIGHT <= ROWS - 6 ))
+}
+measure_stage || exit 0
 
 RESET=$'\e[0m'
 BOLD=$'\e[1m'
@@ -48,63 +58,419 @@ read -r FRAME_DELAY PULSE_DELAY TYPE_DELAY HOLD_DELAY < <(
 )
 [[ -n $HOLD_DELAY ]] || exit 0
 
-ART=(
-  '        ⢀⣠⣤⣴⣶⣤⣄⡀            '
-  '      ⢀⣶⡿⠛⠉⠉⠉⠉⢛⣿⣷⣶⣶⣶⣶⣤⣀     '
-  '     ⢠⣿⠏   ⣠⣴⣾⠿⠛⠉   ⠈⠙⢿⣷⡄   '
-  '  ⢀⣤⣶⣿⣿  ⢰⣿⠟⠋  ⢀⣠⣶⣶⣤⡀  ⢹⣿⡀  '
-  ' ⣠⣿⠟⠁⢸⣿  ⢸⣿ ⣀⣴⣾⣿⠛⠉⠈⠛⠿⣷⣦⣈⣿⡇  '
-  '⢠⣿⡏  ⢸⣿  ⢸⣿⡿⠟⠋⠙⠻⢿⣶⣄⡀  ⠙⠻⣿⣧  '
-  '⠸⣿⡇  ⢸⣿⡀ ⢸⣿      ⣿⡿⠿⣷⣦⡀ ⠈⢿⣷ '
-  ' ⢻⣷⡀ ⠈⠛⢿⣷⣾⣿      ⣿⡇ ⠈⣿⣿  ⠘⣿⡇'
-  '  ⠻⣿⣦⣄⡀ ⠈⠙⠿⣷⣦⣄⣠⣴⣾⣿⡇  ⣿⣿  ⢸⣿⠃'
-  '  ⢸⣿⡏⠻⢿⣶⣤⣀⢀⣤⣿⡿⠟⠉ ⣿⡇  ⣿⣿⢀⣴⣿⠏ '
-  '  ⠈⣿⣧  ⠈⠙⠿⠿⠛⠁  ⣠⣴⣿⠇  ⣿⣿⡿⠟⠁  '
-  '   ⠈⢿⣷⣄⡀   ⢀⣠⣶⡿⠟⠋   ⣰⣿⠃     '
-  '     ⠉⠛⠿⠿⠿⠿⠿⣿⣧⣀⣀⣀⣀⣤⣾⡿⠃      '
-  '            ⠈⠙⠛⠻⠿⠛⠋⠁        '
-)
+# These glyphs are the native first-screen frame at phase 0.5, captured
+# from Codex 0.167.2 for each possible stage width. Keep the native blank
+# margins as offsets: centering the cropped glyphs moves the mark.
+# Reference: openai/codex, rust-v0.167.2, tui/src/empty_state_animation.rs.
+load_art() {
+  case $STAGE_WIDTH in
+    60) ART_X=14; ART_Y=2; ART=(
+      '           ⣀⣤⣤⣤⣀⣀                '
+      '        ⣠⣶⣿⣿⣿⣿⣿⣿⣿⣿⣦⣤⣤⣤⣤⣤⣤⡀       '
+      '      ⢀⣾⣿⣿⠿⠋⠉⠉⢉⣭⣿⣿⣿⣿⣿⠿⣿⣿⣿⣿⣷⣄     '
+      '     ⣀⣾⣿⣿⠃ ⣀⣴⣾⣿⣿⡿⠟⠋ ⣀⡀ ⠈⠙⢿⣿⣿⣧    '
+      '  ⣀⣶⣿⣿⣿⣿⡇ ⢸⣿⣿⡿⠛⠉⢀⣠⣴⣿⣿⣿⣷⣦⣀⠈⢻⣿⣿⡇   '
+      ' ⣰⣿⣿⡿⢿⣿⣿⡇ ⢸⣿⣿⢀⣤⣶⣿⣿⣿⠟⠛⠻⣿⣿⣿⣿⣮⣿⣿⡷   '
+      '⢰⣿⣿⡟⠁⢸⣿⣿⡇ ⢸⣿⣿⣿⣿⠿⠿⣿⣿⣿⣦⣄⡀⠈⠛⠿⣿⣿⣿⣧⡀  '
+      '⣾⣿⣿⠃ ⢸⣿⣿⡇ ⢸⣿⣿⠋⠁  ⠈⠙⢻⣿⣿⣿⣶⣤⡀ ⠹⢿⣿⣷⡄ '
+      '⢸⣿⣿⣇ ⠸⣿⣿⣷⣦⣼⣿⣿      ⢸⣿⣿⠻⢿⣿⣿⡇ ⠘⣿⣿⣿ '
+      '⠈⢿⣿⣿⣦⡀⠈⠛⠿⣿⣿⣿⣿⣄⡀  ⢀⣠⣼⣿⣿  ⣿⣿⡇  ⣿⣿⣿⠇'
+      '  ⢻⣿⣿⣿⣷⣦⣀⠈⠙⠻⣿⣿⣿⣶⣶⣿⣿⣿⣿⣿  ⣿⣿⡇ ⣠⣿⣿⣿ '
+      '  ⢸⣿⣿⡿⢿⣿⣿⣿⣦⣠⣴⣿⣿⣿⡿⠟⠋⢸⣿⣿  ⣿⣿⣷⣴⣿⣿⣿⠃ '
+      '  ⠘⣿⣿⣷ ⠈⠛⢿⣿⣿⣿⠿⠋⠉ ⣠⣴⣿⣿⣿  ⣿⣿⣿⣿⣿⠟⠁  '
+      '   ⠻⣿⣿⣿⣤⣀ ⠈⠉ ⢀⣤⣶⣿⣿⣿⠿⠟⠁ ⣰⣿⣿⡟⠋⠁    '
+      '    ⠈⠿⣿⣿⣿⣿⣶⣾⣿⣿⣿⣿⠟⠋⠁  ⣠⣼⣿⣿⡟       '
+      '       ⠙⠛⠛⠛⠻⠛⢿⣿⣿⣿⣿⣷⣾⣿⣿⣿⡿⠏        '
+      '              ⠈⠙⠛⠿⠿⠿⠿⠛⠉          '
+    ) ;;
+    59) ART_X=14; ART_Y=2; ART=(
+      '          ⣀⣤⣤⣤⣤⣤⣀               '
+      '       ⣠⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⣶⣶⣶⣶⣦⣤⡀      '
+      '      ⣴⣿⣿⠿⠋⠁ ⣀⣤⣾⣿⣿⡿⠿⠿⠿⠿⣿⣿⣿⣷⣄    '
+      '   ⢀⣀⣴⣿⣿⠏ ⣠⣴⣿⣿⣿⡿⠛⠁⣀⣠⣄⣀  ⠛⣿⣿⣿⡆   '
+      ' ⢀⣴⣿⣿⣿⣿⣿  ⣿⣿⡟⠋⠁⣠⣤⣾⣿⣿⣿⣿⣷⣦⣄⡘⣿⣿⣿   '
+      '⢠⣿⣿⣿⠋⢸⣿⣿  ⣿⣿⣧⣶⣿⣿⣿⣿⣿⡁⠈⠛⠿⣿⣿⣿⣿⣿⣿   '
+      '⣾⣿⣿⠃ ⢸⣿⣿  ⣿⣿⣿⡿⠟⠉⠛⢿⣿⣿⣷⣦⣄⡀⠉⠛⢿⣿⣿⣦⡀ '
+      '⣿⣿⣿  ⢸⣿⣿⣄ ⣿⣿⡇     ⢸⣿⣿⣿⣿⣿⣶⣤ ⠙⣿⣿⣷ '
+      '⢸⣿⣿⣧⡀⠘⠻⣿⣿⣿⣿⣿⡇     ⢸⣿⣿⡇⠉⢻⣿⣿  ⢻⣿⣿⡇'
+      ' ⠙⣿⣿⣿⣦⣄⡀⠉⠻⢿⣿⣿⣷⣤⣀⣤⣶⣿⣿⣿⡇ ⢸⣿⣿  ⣾⣿⣿⡇'
+      '  ⣸⣿⣿⣿⣿⣿⣶⣤⡀⢈⣿⣿⣿⣿⣿⠿⠛⣿⣿⡇ ⢸⣿⣿⢀⣴⣿⣿⡟ '
+      '  ⢸⣿⣿⡆⠙⠻⢿⣿⣿⣿⣿⣿⠟⠋⠁⣀⣴⣿⣿⡇ ⢸⣿⣿⣿⣿⣿⠟⠁ '
+      '  ⠘⢿⣿⣿⣦⡀ ⠉⠛⠛⠁⢀⣠⣴⣾⣿⣿⣿⠟⠁⢀⣿⣿⣿⠟⠛⠁   '
+      '   ⠈⠻⣿⣿⣿⣷⣶⣤⣶⣾⣿⣿⣿⠿⠛⠁  ⣠⣾⣿⣿⠇      '
+      '     ⠈⠙⠻⠿⠿⠿⠿⢿⣿⣿⣿⣶⣶⣶⣾⣿⣿⣿⡿⠃       '
+      '             ⠉⠙⠻⠿⠿⠿⠿⠿⠋⠉         '
+    ) ;;
+    58) ART_X=13; ART_Y=2; ART=(
+      '          ⢀⣠⣤⣤⣤⣤⣄⡀              '
+      '        ⣤⣾⣿⣿⣿⣿⣿⣿⣿⣿⣷⣴⣶⣶⣶⣶⣤⣀      '
+      '      ⢀⣾⣿⣿⠟⠉  ⣠⣴⣿⣿⣿⠿⠿⠿⠿⣿⣿⣿⣷⣆    '
+      '    ⢀⣠⣼⣿⣿⠃⢀⣤⣾⣿⣿⣿⠟⠋⢀⣀⣤⣀  ⠙⢿⣿⣿⣧   '
+      '  ⣠⣾⣿⣿⣿⣿⣿ ⢸⣿⣿⠛⠉⢀⣤⣴⣿⣿⣿⣿⣿⣶⣄⣀⣿⣿⣿⡀  '
+      ' ⣰⣿⣿⡿⠋⣿⣿⣿ ⢸⣿⣿⣤⣾⣿⣿⣿⣿⣍⠈⠙⠻⢿⣿⣿⣿⣿⣿⠁  '
+      '⢀⣿⣿⡿⠁ ⣿⣿⣿ ⢸⣿⣿⣿⠿⠋⠙⠻⣿⣿⣿⣶⣤⡀⠈⠛⢿⣿⣿⣷⡀ '
+      '⠘⣿⣿⣧  ⣿⣿⣿⣀⢸⣿⣿      ⣿⣿⣿⣿⣿⣷⣦⡀⠙⢿⣿⣿⡄'
+      ' ⢿⣿⣿⣄ ⠛⠿⣿⣿⣿⣿⣿      ⣿⣿⡇⠈⢹⣿⣿⡇ ⢸⣿⣿⡇'
+      '  ⠻⣿⣿⣷⣦⣀⠈⠙⠻⣿⣿⣿⣦⣄⣠⣴⣿⣿⣿⡇ ⢸⣿⣿⡇ ⢸⣿⣿⡏'
+      '   ⣿⣿⣿⣿⣿⣷⣦⣄⡀⣙⣿⣿⣿⣿⡿⠟⣿⣿⡇ ⢸⣿⣿⡇⣰⣿⣿⣿⠁'
+      '   ⣿⣿⣿⡈⠙⠿⣿⣿⣿⣿⣿⡿⠛⠉⢀⣠⣿⣿⣧ ⢸⣿⣿⣿⣿⣿⡿⠁ '
+      '   ⠹⣿⣿⣷⣄⡀ ⠙⠛⠋ ⣀⣤⣶⣿⣿⣿⠿⠋ ⣸⣿⣿⠿⠛⠉   '
+      '    ⠘⢿⣿⣿⣿⣶⣦⣴⣶⣿⣿⣿⡿⠛⠋  ⢀⣼⣿⣿⡟      '
+      '      ⠈⠛⠿⠿⠿⠿⠿⢿⣿⣿⣷⣶⣶⣶⣿⣿⣿⡿⠏       '
+      '             ⠈⠉⠛⠿⠿⠿⠿⠿⠟⠉         '
+    ) ;;
+    57) ART_X=13; ART_Y=2; ART=(
+      '         ⢀⣠⣤⣶⣶⣦⣤⣄⡀             '
+      '       ⣠⣾⣿⣿⡿⠿⠿⠿⣿⣿⣿⣶⣿⣿⣿⣷⣶⣦⣀     '
+      '      ⣰⣿⣿⠟⠁ ⣀⣠⣶⣿⣿⡿⠿⠛⠛⠛⠻⢿⣿⣿⣷⡄   '
+      '   ⣀⣤⣶⣿⣿⡏ ⣰⣾⣿⣿⡿⠛⠉⣀⣤⣶⣶⣄⣀ ⠙⣿⣿⣿⡀  '
+      ' ⢠⣾⣿⣿⣿⣿⣿⡇ ⣿⣿⡏⢁⣠⣴⣾⣿⣿⠿⢿⣿⣿⣿⣦⣼⣿⣿⡇  '
+      '⢀⣾⣿⣿⠋⢸⣿⣿⡇ ⣿⣿⣷⣿⣿⣿⣿⣿⣷⣤⣀⠈⠙⠻⣿⣿⣿⣿⣇  '
+      '⢸⣿⣿⡇ ⢸⣿⣿⡇ ⣿⣿⡟⠛⠁ ⠈⠙⢻⣿⣿⣿⣦⣄⡀⠉⠻⣿⣿⣧⡀'
+      '⠘⣿⣿⣧ ⠸⣿⣿⣷⣦⣿⣿⡇     ⢸⣿⣿⠻⢿⣿⣿⡇ ⠸⣿⣿⣇'
+      ' ⠻⣿⣿⣷⣄⠈⠙⠻⣿⣿⣿⣧⣄⡀ ⢀⣠⣼⣿⣿  ⣿⣿⡇  ⣿⣿⣿'
+      '  ⠈⣿⣿⣿⣿⣶⣄⡀⠉⠛⢿⣿⣿⣿⣿⣿⣿⣿⣿  ⣿⣿⡇ ⣼⣿⣿⡏'
+      '  ⠘⣿⣿⡟⠻⢿⣿⣿⣷⣶⣿⣿⣿⠟⠋⠁⣸⣿⣿  ⣿⣿⣧⣾⣿⣿⠟ '
+      '   ⢿⣿⣿⣄ ⠈⠙⠿⠿⠛⠉⢀⣠⣴⣾⣿⣿⡿ ⢀⣿⣿⣿⡿⠟⠉  '
+      '    ⠻⣿⣿⣿⣦⣤⣤⣤⣴⣾⣿⣿⡿⠿⠋⠁ ⢀⣾⣿⣿⠃     '
+      '     ⠈⠛⠿⢿⣿⣿⣿⣿⣿⣿⣿⣦⣤⣤⣴⣾⣿⣿⡿⠃      '
+      '             ⠙⠛⠿⢿⣿⣿⠿⠿⠟⠋        '
+    ) ;;
+    56) ART_X=13; ART_Y=2; ART=(
+      '         ⣀⣤⣴⣶⣶⣤⣤⣀             '
+      '       ⣴⣾⣿⣿⡿⠿⠿⢿⣿⣿⣷⣾⣿⣿⣿⣶⣦⣄⡀    '
+      '      ⣾⣿⣿⠋⠁⢀⣀⣴⣾⣿⣿⠿⠟⠛⠛⠛⠿⣿⣿⣿⣆   '
+      '   ⣠⣴⣾⣿⣿⠃⢀⣶⣿⣿⣿⠟⠋⢁⣠⣴⣶⣦⣀ ⠈⢻⣿⣿⡆  '
+      ' ⣠⣾⣿⣿⢿⣿⣿ ⢸⣿⣿⠉⣀⣤⣶⣿⣿⡿⠿⣿⣿⣿⣶⣬⣿⣿⣧  '
+      '⢰⣿⣿⡟⠁⢸⣿⣿ ⢸⣿⣿⣾⣿⣿⣿⣿⣷⣦⣄ ⠉⠻⢿⣿⣿⣿⣧  '
+      '⣾⣿⣿⠁ ⢸⣿⣿ ⢸⣿⣿⠛⠋  ⠙⠛⣿⣿⣿⣶⣤⣀⠈⠻⢿⣿⣷⡄'
+      '⢸⣿⣿⣇ ⢸⣿⣿⣶⣼⣿⣿      ⣿⣿⡟⠿⣿⣿⣷ ⠈⣿⣿⣿'
+      '⠈⢻⣿⣿⣦⡀⠈⠛⠿⣿⣿⣿⣤⣄  ⣀⣤⣿⣿⡇ ⢸⣿⣿  ⣹⣿⣿'
+      '  ⢹⣿⣿⣿⣷⣦⣄ ⠙⠻⣿⣿⣿⣿⣿⣿⣿⣿⡇ ⢸⣿⣿ ⣰⣿⣿⡿'
+      '  ⢸⣿⣿⡝⠻⣿⣿⣿⣶⣾⣿⣿⡿⠛⠉⢀⣿⣿⡇ ⢸⣿⣿⣾⣿⣿⡿⠁'
+      '  ⠘⣿⣿⣷⣄ ⠉⠻⠿⠟⠋⠁⣀⣤⣶⣿⣿⣿⠇ ⣺⣿⣿⡿⠿⠋  '
+      '   ⠘⢿⣿⣿⣷⣦⣤⣤⣤⣶⣿⣿⣿⠿⠟⠉ ⢀⣰⣿⣿⡏     '
+      '     ⠙⠛⠿⣿⣿⣿⣿⣿⣿⣿⣷⣤⣤⣤⣶⣿⣿⣿⠋      '
+      '            ⠈⠛⠻⠿⣿⣿⡿⠿⠟⠋        '
+    ) ;;
+    55) ART_X=13; ART_Y=2; ART=(
+      '        ⢀⣠⣤⣶⣶⣦⣤⣄⡀             '
+      '      ⢀⣶⣿⣿⣿⠿⠿⠿⣿⣿⣿⣶⣿⣿⣿⣷⣶⣤⡀     '
+      '     ⢠⣿⣿⡟⠉ ⣀⣠⣶⣿⣿⡿⠿⠛⠛⠛⠻⢿⣿⣿⣦    '
+      '  ⢀⣠⣶⣾⣿⡟ ⢰⣾⣿⣿⡿⠛⠉⣀⣤⣶⣶⣄⡀ ⠻⣿⣿⣧   '
+      ' ⣴⣿⣿⡿⣿⣿⡇ ⢸⣿⡟⠁⣠⣴⣾⣿⣿⠿⢿⣿⣿⣷⣤⣻⣿⣿   '
+      '⣰⣿⣿⠟ ⣿⣿⡇ ⣸⣿⣷⣿⣿⣿⣿⣿⣶⣤⡀⠉⠛⠿⣿⣿⣿⣿⡀  '
+      '⣿⣿⣿  ⣿⣿⡇ ⣿⣿⡟⠛⠁ ⠈⠛⢻⣿⣿⣷⣦⣄⡀⠙⢿⣿⣿⣄ '
+      '⢻⣿⣿⡀ ⣿⣿⣿⣦⣿⣿⡇     ⢸⣿⣿⠻⢿⣿⣿⡆ ⢻⣿⣿ '
+      '⠘⢿⣿⣷⣦⡀⠙⠻⢿⣿⣿⣧⣤⡀ ⢀⣠⣼⣿⣿ ⠈⣿⣿⡇ ⢸⣿⣿⡇'
+      '  ⣿⣿⣿⣿⣷⣤⣀⠈⠛⢿⣿⣿⣿⣿⣿⣿⣿⣿  ⣿⣿⡇⢀⣿⣿⣿⠁'
+      '  ⣿⣿⣿⠛⠿⣿⣿⣷⣶⣿⣿⣿⠟⠋⠁⣸⣿⣿  ⣿⣿⣷⣿⣿⣿⠃ '
+      '  ⠹⣿⣿⣧⡀⠈⠙⠿⠿⠛⠉⢀⣠⣴⣾⣿⣿⡿ ⢰⣿⣿⣿⠿⠛⠁  '
+      '   ⠙⣿⣿⣿⣶⣤⣤⣤⣴⣾⣿⣿⡿⠟⠋⠁ ⣠⣿⣿⡿      '
+      '    ⠈⠙⠻⢿⣿⣿⣿⣿⣿⣿⣿⣦⣤⣤⣴⣾⣿⣿⡟⠁      '
+      '            ⠙⠛⠿⢿⣿⣿⠿⠿⠛⠁        '
+    ) ;;
+    54) ART_X=12; ART_Y=2; ART=(
+      '        ⢀⣠⣤⣶⣶⣶⣶⣦⣄⡀            '
+      '       ⣴⣿⣿⡿⠿⠛⠛⢿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣤⡀    '
+      '      ⣼⣿⡿⠋ ⣀⣤⣾⣿⣿⠿⠛⠋⠉⠉⠙⠻⣿⣿⣿⡆   '
+      '  ⢀⣤⣶⣿⣿⣿⡇ ⣾⣿⡿⠟⠋⢁⣠⣴⣿⣿⣶⣤⣀⠈⢻⣿⣿⡄  '
+      ' ⢠⣾⣿⡿⢻⣿⣿⡇ ⣿⣿⣀⣤⣾⣿⣿⣿⠛⠙⠿⣿⣿⣿⣾⣿⣿⡇  '
+      ' ⣿⣿⡿⠁⢸⣿⣿⡇ ⣿⣿⣿⡿⠟⠻⢿⣿⣿⣶⣤⣀⠉⠛⢿⣿⣿⣧⡀ '
+      '⠘⣿⣿⡇ ⢸⣿⣿⣇ ⣿⣿⠁    ⠈⣿⣿⣿⣿⣷⣦⡄⠘⢿⣿⣷⡀'
+      ' ⢿⣿⣿⣄⠈⠻⢿⣿⣿⣿⣿⡀    ⢀⣿⣿⡇⠙⣿⣿⡇ ⠘⣿⣿⡇'
+      '  ⠻⣿⣿⣷⣦⣄⠈⠙⠿⣿⣿⣷⣦⣴⣾⣿⣿⣿⡇ ⣿⣿⡇ ⢰⣿⣿⡇'
+      '  ⠠⣿⣿⡿⣿⣿⣿⣶⣄⣤⣿⣿⣿⡿⠟⠋⣿⣿⡇ ⣿⣿⣇⣴⣿⣿⡿ '
+      '   ⢿⣿⣷⡀⠉⠛⠿⣿⣿⠟⠋⠉⣀⣤⣶⣿⣿⠇ ⣿⣿⣿⣿⡿⠋  '
+      '   ⠈⢿⣿⣿⣶⣄⣀⣀⣀⣤⣶⣿⣿⣿⠿⠛⠉ ⣰⣿⣿⠏⠁    '
+      '     ⠙⠻⣿⣿⣿⣿⣿⣿⣿⣿⣭⣀⣀⣤⣴⣾⣿⣿⠏      '
+      '           ⠁⠈⠻⠿⣿⣿⣿⣿⣿⠟⠋⠁       '
+    ) ;;
+    53) ART_X=12; ART_Y=2; ART=(
+      '        ⣀⣤⣴⣶⣶⣶⣶⣤⣀            '
+      '      ⢠⣾⣿⣿⠿⠟⠛⠻⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⡀    '
+      '     ⢀⣿⣿⡟⠁⢀⣠⣴⣿⣿⡿⠟⠛⠉⠉⠉⠛⢿⣿⣿⣦   '
+      '  ⢀⣴⣾⣿⣿⣿ ⢰⣿⣿⠿⠛⠉⣀⣤⣾⣿⣷⣦⣄⡀⠹⣿⣿⡆  '
+      ' ⣰⣿⣿⡿⢻⣿⣿ ⢸⣿⣇⣠⣴⣿⣿⣿⡟⠛⠻⢿⣿⣿⣷⣿⣿⡇  '
+      '⢰⣿⣿⡏ ⢸⣿⣿ ⢸⣿⣿⣿⠿⠛⠿⣿⣿⣷⣦⣀⠈⠛⠿⣿⣿⣷⡄ '
+      '⢸⣿⣿⡇ ⢸⣿⣿⣀⢸⣿⡏     ⢹⣿⣿⣿⣿⣦⣄⠈⢻⣿⣿⡆'
+      ' ⢿⣿⣷⡄⠘⠻⢿⣿⣿⣿⣇     ⣸⣿⡇⠈⢻⣿⣿  ⣿⣿⣧'
+      ' ⠈⢻⣿⣿⣶⣤⣀⠉⠻⢿⣿⣿⣶⣤⣶⣿⣿⣿⣇ ⢸⣿⣿ ⢠⣿⣿⡏'
+      '  ⢸⣿⣿⡿⣿⣿⣷⣦⣤⣼⣿⣿⣿⠿⠛⢹⣿⣿ ⢸⣿⣿⣰⣿⣿⡿⠁'
+      '  ⠘⣿⣿⣧ ⠙⠻⢿⣿⡿⠟⠉⢁⣠⣴⣿⣿⡿ ⢸⣿⣿⣿⣿⠟⠁ '
+      '   ⠙⣿⣿⣷⣦⣀⣀⣀⣠⣴⣾⣿⣿⡿⠟⠋⠁⢠⣿⣿⡟⠉    '
+      '    ⠈⠛⠿⣿⣿⣿⣿⣿⣿⣿⣯⣅⣀⣠⣤⣶⣿⣿⠟⠁     '
+      '          ⠈ ⠙⠿⢿⣿⣿⣿⣿⡿⠛⠉       '
+    ) ;;
+    52) ART_X=12; ART_Y=2; ART=(
+      '        ⣠⣤⣶⣶⣶⣶⣦⣄⡀           '
+      '      ⣰⣾⣿⡿⠿⠛⠛⢿⣿⣿⣿⣿⣿⣿⣿⣷⣶⣄    '
+      '     ⣰⣿⣿⠏ ⣀⣤⣾⣿⣿⠿⠛⠉⠉⠉⠙⠻⣿⣿⣷⡀  '
+      '  ⣠⣴⣿⣿⣿⡏ ⣾⣿⡿⠟⠋⢁⣠⣴⣿⣿⣶⣤⡀⠙⣿⣿⣧  '
+      ' ⣴⣿⣿⠟⣿⣿⡇ ⣿⣿⣇⣤⣾⣿⣿⣿⠛⠛⠿⣿⣿⣷⣿⣿⣿  '
+      '⢸⣿⣿⠃ ⣿⣿⡇ ⣿⣿⣿⡿⠟⠻⢿⣿⣿⣦⣄⡈⠙⠻⢿⣿⣿⣄ '
+      '⢻⣿⣿  ⣿⣿⣇⡀⣿⣿⠁    ⠈⣿⣿⣿⣿⣷⣤⡀⠹⣿⣿⡆'
+      '⠸⣿⣿⣧⡀⠛⠿⣿⣿⣿⣿⡀    ⢀⣿⣿⠈⠙⣿⣿⡇ ⢻⣿⣿'
+      ' ⠘⢿⣿⣿⣦⣄⡈⠙⠻⣿⣿⣷⣦⣴⣾⣿⣿⣿  ⣿⣿⡇ ⣾⣿⣿'
+      '  ⢼⣿⣿⢿⣿⣿⣷⣤⣤⣿⣿⣿⡿⠟⠋⣿⣿  ⣿⣿⣧⣾⣿⣿⠇'
+      '  ⢸⣿⣿⣄⠈⠛⠿⣿⣿⠿⠋⠉⣀⣤⣾⣿⣿ ⢠⣿⣿⣿⣿⠿⠁ '
+      '   ⠻⣿⣿⣷⣤⣀⣀⣀⣠⣶⣿⣿⣿⠿⠛⠉⢀⣼⣿⣿⠉⠁   '
+      '    ⠈⠻⢿⣿⣿⣿⣿⣿⣿⣿⣭⣀⣀⣤⣴⣿⣿⡿⠃     '
+      '          ⠉⠈⠻⠿⣿⣿⣿⣿⡿⠟⠋       '
+    ) ;;
+    51) ART_X=12; ART_Y=2; ART=(
+      '       ⣠⣴⣶⣾⣿⣿⣶⣦⣄⣀⣀⣀⣀⡀       '
+      '     ⢀⣾⣿⣿⠟⠛⠋⢙⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⣄    '
+      '   ⢀⣀⣾⣿⡟⠁⣠⣴⣾⣿⡿⠟⠋⢁⣀⣀ ⠙⢿⣿⣿⣆   '
+      ' ⢠⣾⣿⣿⣿⣿⠃⢸⣿⣿⠛⠉⣠⣴⣾⣿⣿⣿⣷⣦⣀⣻⣿⣿⡀  '
+      '⢰⣿⣿⡟⢹⣿⣿ ⢸⣿⣿⣶⣿⣿⣿⣿⣭⣀⠙⠻⢿⣿⣿⣿⣿⡁  '
+      '⣿⣿⡟ ⢸⣿⣿ ⢸⣿⣿⠟⠋ ⠙⠛⣿⣿⣷⣦⣄⡈⠙⢿⣿⣷⣄ '
+      '⢻⣿⣿⡀⠸⣿⣿⣶⣼⣿⣿     ⢻⣿⡟⠿⣿⣿⡆ ⢻⣿⣿ '
+      '⠈⢿⣿⣷⣄⡈⠙⠻⢿⣿⣿⣤⣄ ⣠⣤⣾⣿⡇ ⣿⣿⡇ ⢸⣿⣿⠃'
+      '  ⣿⣿⣿⣿⣷⣦⣄⠈⣛⣿⣿⣿⣿⠿⢻⣿⡇ ⣿⣿⡇⣠⣾⣿⡿ '
+      '  ⢿⣿⣧⠉⠛⢿⣿⣿⣿⡿⠟⠋⢁⣠⣾⣿⡇ ⣸⣿⣿⣿⣿⠟⠁ '
+      '  ⠘⣿⣿⣷⣄⡀⠉⠉⠉⣠⣴⣾⣿⣿⡿⠛⠁⢠⣿⣿⡟⠋⠁   '
+      '   ⠈⠛⢿⣿⣿⣿⣿⣿⣿⣿⣟⣋⣁⣀⣠⣴⣿⣿⠟      '
+      '      ⠈⠉⠉⠉⠉⠛⢿⣿⣿⣿⣿⣿⡿⠟⠉       '
+      '              ⠉⠉⠉           '
+    ) ;;
+    50) ART_X=11; ART_Y=2; ART=(
+      '       ⢀⣤⣴⣶⣿⣿⣷⣶⣤⣀⣀⣀⣀⣀       '
+      '      ⣠⣿⣿⡿⠛⠛⠉⣻⣿⣿⣿⣿⣿⣿⣿⣿⣶⣄    '
+      '    ⣀⣠⣿⣿⠋⢀⣤⣶⣿⣿⠿⠛⢉⣀⣀ ⠉⠻⣿⣿⣧   '
+      '  ⣠⣾⣿⣿⣿⣿ ⣿⣿⡿⠋⢁⣤⣶⣿⣿⣿⣿⣶⣄⡸⣿⣿⡇  '
+      ' ⣼⣿⣿⠏⢸⣿⣿ ⣿⣿⣷⣾⣿⣿⣿⣯⣅⡈⠛⠿⣿⣿⣿⣿⡇  '
+      '⢠⣿⣿⡏ ⢸⣿⣿ ⣿⣿⡿⠛⠁⠈⠛⢿⣿⣿⣶⣤⣀⠉⠻⣿⣿⣆ '
+      ' ⣿⣿⣇ ⢸⣿⣿⣦⣿⣿⡇    ⢸⣿⣿⠻⢿⣿⣷ ⢹⣿⣿⡄'
+      ' ⠘⢿⣿⣷⣄⠉⠙⠿⣿⣿⣷⣤⡀⢀⣤⣾⣿⣿ ⢸⣿⣿ ⢀⣿⣿⡇'
+      '  ⢈⣿⣿⣿⣿⣶⣤⡀⢙⣻⣿⣿⣿⡿⢿⣿⣿ ⢸⣿⣿⢀⣾⣿⣿⠃'
+      '  ⠈⣿⣿⣎⠙⠻⣿⣿⣿⣿⠿⠛⠉⣀⣼⣿⣿ ⢸⣿⣿⣿⣿⡿⠃ '
+      '   ⠹⣿⣿⣦⣄⡀⠉⠉⢁⣤⣴⣿⣿⡿⠟⠋ ⣼⣿⡿⠛⠉   '
+      '    ⠉⠻⣿⣿⣿⣿⣿⣿⣿⣿⣛⣉⣀⣀⣤⣾⣿⡿⠃     '
+      '       ⠉⠉⠉⠉⠙⠻⣿⣿⣿⣿⣿⣿⠿⠋       '
+      '              ⠈⠉⠉⠁          '
+    ) ;;
+    49) ART_X=11; ART_Y=2; ART=(
+      '       ⣀⣤⣶⣾⣿⣿⣶⣦⣄⣀⣀⣀⣀⡀      '
+      '      ⣴⣿⣿⠿⠛⠋⢙⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⡀   '
+      '    ⣀⣼⣿⡿⠁⣠⣴⣾⣿⡿⠟⠋⣁⣀⡀⠈⠙⢿⣿⣿⡀  '
+      '  ⣴⣿⣿⣿⣿⡇ ⣿⣿⠟⠉⣠⣴⣾⣿⣿⣿⣷⣦⣈⣿⣿⣇  '
+      ' ⣾⣿⡿⠋⣿⣿⡇ ⣿⣿⣶⣿⣿⣿⣿⣍⣈⠙⠻⣿⣿⣿⣿⣏  '
+      '⢸⣿⣿⠃ ⣿⣿⡇ ⣿⣿⠟⠋ ⠙⠻⣿⣿⣷⣦⣀⠈⠛⣿⣿⣦⡀'
+      '⠘⣿⣿⣇ ⢿⣿⣷⣦⣿⣿     ⣿⣿⡟⢿⣿⣿⡆⠈⣿⣿⡇'
+      ' ⠹⣿⣿⣦⣀⠉⠛⢿⣿⣿⣦⣄ ⣠⣴⣿⣿⡇ ⣿⣿⡇ ⣿⣿⡟'
+      '  ⢸⣿⣿⣿⣿⣦⣄⡈⣙⣿⣿⣿⣿⠿⣿⣿⡇ ⣿⣿⣇⣴⣿⣿⠇'
+      '  ⢸⣿⣿⡉⠛⢿⣿⣿⣿⣿⠟⠋⢁⣠⣿⣿⡇ ⣿⣿⣿⣿⡿⠋ '
+      '   ⢿⣿⣿⣦⣀⠈⠉⠉⣀⣤⣾⣿⣿⠿⠛⠁⣰⣿⣿⠛⠉   '
+      '    ⠙⢿⣿⣿⣿⣿⣿⣿⣿⣟⣋⣁⣀⣠⣴⣿⣿⠋     '
+      '      ⠈⠉⠉⠉⠉⠛⢿⣿⣿⣿⣿⣿⡿⠟⠁      '
+      '              ⠉⠉⠁          '
+    ) ;;
+    48) ART_X=11; ART_Y=2; ART=(
+      '      ⢀⣤⣶⣿⣿⣿⣿⣷⣦⣄⣤⣤⣤⣀⡀     '
+      '     ⣰⣿⣿⠟⠋⠉⣉⣭⣿⣿⣿⠿⠿⢿⣿⣿⣷⣄   '
+      '  ⢀⣠⣤⣿⣿⠏⢠⣴⣿⣿⡿⠛⢉⣠⣤⣤⣀⠈⠻⣿⣿⣧  '
+      ' ⣰⣿⣿⣿⣿⣿ ⢸⣿⡏⣁⣤⣶⣿⣿⠿⢿⣿⣷⣶⣽⣿⣿  '
+      '⢰⣿⣿⠋⢸⣿⣿ ⢸⣿⣿⣿⠿⠿⣿⣿⣦⣤⡈⠙⠻⣿⣿⣿⣄ '
+      '⢻⣿⣿ ⢸⣿⣿⣀⢸⣿⡏    ⢹⣿⣿⣿⣷⣦⡀⠙⣿⣿⡆'
+      '⠘⣿⣿⣦⡈⠛⢿⣿⣿⣿⣇    ⣸⣿⣷⠉⢻⣿⡇ ⢸⣿⣿'
+      ' ⠈⣿⣿⣿⣶⣤⣈⠙⠻⣿⣿⣶⣶⣿⣿⣿⣿ ⢸⣿⡇⢀⣾⣿⡿'
+      '  ⣿⣿⣟⠻⢿⣿⣷⣶⣿⣿⡿⠟⠋⣸⣿⣿ ⢸⣿⣷⣿⣿⡿⠃'
+      '  ⠹⣿⣿⣦⡀⠉⠛⠟⠋⢁⣠⣶⣾⣿⡿⠟ ⣿⣿⡿⠟⠋  '
+      '   ⠘⠿⣿⣿⣷⣶⣶⣾⣿⣿⡟⠛⠁⢀⣠⣾⣿⡿⠁    '
+      '     ⠈⠉⠛⠛⠛⠛⠿⣿⣿⣿⣿⣿⣿⡿⠛      '
+      '             ⠉⠉⠉⠉⠁        '
+    ) ;;
+    47) ART_X=11; ART_Y=2; ART=(
+      '      ⣠⣴⣾⣿⣿⣿⣿⣶⣤⣠⣤⣤⣄⣀      '
+      '     ⣼⣿⡿⠛⠉⢉⣩⣽⣿⣿⡿⠿⠿⣿⣿⣿⣦⡀   '
+      '  ⢀⣠⣼⣿⣿⠁⣤⣾⣿⣿⠟⠋⣁⣤⣤⣄ ⠙⢿⣿⣷   '
+      '⢀⣴⣿⣿⢿⣿⣿ ⣿⣿⢉⣠⣴⣾⣿⡿⠿⣿⣿⣶⣼⣿⣿⠄  '
+      '⣼⣿⡿⠁⢸⣿⡇ ⣿⣿⣿⡿⠿⢿⣿⣶⣤⣈⠉⠻⢿⣿⣿⣄  '
+      '⣿⣿⡇ ⢸⣿⣇⡀⣿⣿⠉   ⠉⣿⣿⣿⣿⣦⣄⠙⢿⣿⣧ '
+      '⠸⣿⣿⣄⠘⠻⢿⣿⣿⣿⣀   ⢀⣿⣿⠈⢹⣿⣿ ⠸⣿⣿⡄'
+      ' ⠙⣿⣿⣷⣦⣄⡈⠛⠿⣿⣷⣶⣾⣿⣿⣿ ⢸⣿⣿ ⣸⣿⣿ '
+      '  ⣿⣿⡝⠿⣿⣿⣶⣶⣿⣿⠿⠋⢁⣿⣿ ⢸⣿⣿⣾⣿⣿⠃ '
+      '  ⢻⣿⣷⣄⡀⠙⠛⠟⠉⣀⣴⣶⣿⣿⠿ ⣸⣿⣿⠿⠋⠁  '
+      '   ⠙⢿⣿⣿⣶⣶⣶⣿⣿⣿⠛⠉ ⣀⣴⣿⣿⠇     '
+      '     ⠈⠙⠛⠛⠛⠻⢿⣿⣿⣿⣿⣿⣿⠟⠁      '
+      '            ⠈⠉⠉⠉⠉         '
+    ) ;;
+    46) ART_X=11; ART_Y=2; ART=(
+      '     ⢀⣠⣶⣿⣿⣿⣿⣷⣦⣤⣤⣤⣤⣀⡀     '
+      '    ⢠⣾⣿⡿⠋⠉⣉⣭⣿⣿⣿⠿⠿⣿⣿⣿⣷⡄   '
+      '  ⣀⣤⣾⣿⡏⢠⣴⣿⣿⡿⠛⢉⣠⣤⣤⡀⠈⢻⣿⣿⡄  '
+      '⢀⣾⣿⡿⣿⣿⡇⢸⣿⡟⣁⣤⣶⣿⣿⠿⢿⣿⣷⣦⣿⣿⡇  '
+      '⣾⣿⡟⠁⣿⣿⡇⢸⣿⣿⣿⠿⠿⣿⣷⣦⣄⡉⠛⠿⣿⣿⣧⡀ '
+      '⣿⣿⡇ ⣿⣿⣇⢸⣿⡏⠁  ⠈⢹⣿⣿⣿⣶⣤⠈⢻⣿⣷ '
+      '⢻⣿⣷⣄⠙⠿⣿⣿⣿⣇⡀  ⢀⣸⣿⡇⠉⣿⣿⡄ ⣿⣿⡇'
+      ' ⢹⣿⣿⣷⣤⣀⠙⠻⢿⣿⣶⣶⣿⣿⣿⡇ ⣿⣿⡇⢰⣿⣿⠃'
+      ' ⢸⣿⣿⠛⢿⣿⣷⣶⣾⣿⡿⠟⠉⣸⣿⡇ ⣿⣿⣷⣿⣿⠟ '
+      ' ⠈⢿⣿⣧⣀⠈⠛⠻⠋⢁⣠⣶⣿⣿⡿⠇⢠⣿⣿⠿⠛⠁  '
+      '  ⠈⠻⣿⣿⣿⣶⣶⣾⣿⣿⡟⠋⠁⣀⣠⣾⣿⡟     '
+      '     ⠉⠛⠛⠛⠛⠿⣿⣿⣿⣿⣿⣿⠿⠋      '
+      '            ⠉⠉⠉⠉         '
+    ) ;;
+    45) ART_X=10; ART_Y=1; ART=(
+      '         ⢀⣀⣀⡀            '
+      '      ⣠⣶⣿⣿⣿⣿⣿⣷⣦⣤⣤⣤⣤⣄⡀    '
+      '     ⣼⣿⡿⠋⢁⣠⣴⣾⣿⡿⠟⠛⠻⠿⣿⣿⣦   '
+      '  ⣠⣴⣾⣿⣿⠁⣼⣿⣿⠟⠋⣡⣴⣶⣷⣦⣄⠘⣿⣿⣧  '
+      ' ⣼⣿⣿⢻⣿⣿ ⣿⣿⣠⣴⣿⣿⣿⡛⠛⠿⣿⣿⣿⣿⣿  '
+      '⢸⣿⣿⠁⢸⣿⣿ ⣿⣿⠿⠛⠉⠛⠿⣿⣷⣦⣄⡉⠻⣿⣿⣦ '
+      '⠘⣿⣿⡄⠸⣿⣿⣦⣿⣿     ⣿⣿⠻⣿⣿⡆⠈⣿⣿⡇'
+      ' ⠙⣿⣿⣦⣄⡙⠻⢿⣿⣶⣤⣀⣤⣶⣿⣿ ⢸⣿⡇ ⣼⣿⡟'
+      '  ⢼⣿⣿⣿⣿⣶⣤⣨⣿⣿⣿⠿⠛⣿⣿ ⢸⣿⣇⣼⣿⣿⠃'
+      '  ⢸⣿⣿⣄⠉⠻⢿⡿⠟⠋⣁⣴⣶⣿⣿ ⣸⣿⣿⣿⠟⠁ '
+      '   ⠙⢿⣿⣷⣦⣤⣤⣶⣿⣿⠿⠛⠉⢀⣴⣿⣿⠃    '
+      '     ⠉⠛⠛⠛⠟⢿⣿⣿⣷⣶⣾⣿⣿⠿⠁     '
+      '           ⠈⠉⠛⠛⠋⠉        '
+    ) ;;
+    44) ART_X=10; ART_Y=1; ART=(
+      '         ⣀⣀⣀            '
+      '      ⣴⣶⣿⣿⣿⣿⣿⣶⣤⣤⣤⣤⣤⡀    '
+      '    ⢀⣾⣿⠟⠉⢀⣤⣶⣿⡿⠿⠛⠛⠿⣿⣿⣷⡀  '
+      '  ⣠⣶⣿⣿⡟ ⣾⣿⡿⠛⢉⣤⣶⣾⣶⣄⡈⢻⣿⣷  '
+      '⢀⣾⣿⡿⢻⣿⡇ ⣿⣇⣤⣾⣿⣿⣟⠙⠻⢿⣿⣿⣿⣿  '
+      '⢸⣿⡟ ⢸⣿⡇⢸⣿⡿⠟⠋⠙⠻⢿⣿⣶⣤⡈⠛⢿⣿⣧⡀'
+      '⢸⣿⣿⡀⢸⣿⣷⣾⣿⡇    ⢸⣿⡟⢿⣿⣷ ⢻⣿⣧'
+      ' ⠻⣿⣷⣦⣈⠛⠿⣿⣷⣦⣄⣠⣴⣾⣿⡇⠈⣿⣿ ⢸⣿⣿'
+      '  ⣿⣿⡿⣿⣿⣦⣄⣽⣿⣿⡿⠟⢻⣿⡇ ⣿⣿⣴⣿⣿⠇'
+      '  ⢻⣿⣧⡈⠙⠿⣿⠿⠛⢉⣠⣶⣿⣿⠇⢠⣿⣿⣿⠿⠋ '
+      '  ⠈⠻⣿⣿⣶⣤⣤⣴⣾⣿⡿⠟⠋⠁⣠⣾⣿⠏    '
+      '    ⠈⠙⠛⠛⠻⠿⣿⣿⣿⣶⣶⣿⣿⡿⠋     '
+      '           ⠉⠙⠛⠛⠉⠁       '
+    ) ;;
+    43) ART_X=10; ART_Y=1; ART=(
+      '        ⢀⣀⣀⡀           '
+      '     ⢠⣴⣾⣿⣿⣿⣿⣷⣦⣤⣤⣤⣤⣀    '
+      '    ⢰⣿⣿⠋⠁⣀⣴⣾⣿⠿⠛⠛⠻⢿⣿⣷⡄  '
+      ' ⢀⣴⣾⣿⣿⡇⢰⣿⣿⠟⠋⣡⣴⣶⣷⣤⣀⠹⣿⣿⡄ '
+      '⢠⣿⣿⠟⣿⣿⡇⢸⣿⣧⣴⣿⣿⣟⡋⠛⢿⣿⣿⣿⣿⡇ '
+      '⣿⣿⡏ ⣿⣿ ⢸⣿⡿⠛⠉⠛⠿⣿⣷⣦⣌⠙⢿⣿⣷⡄'
+      '⢻⣿⣧ ⢿⣿⣶⣼⣿⡇    ⣿⣿⠿⣿⣿ ⢹⣿⣷'
+      '⠈⢿⣿⣷⣄⡉⠛⢿⣿⣷⣤⣀⣤⣶⣿⣿ ⣿⣿⡄⢠⣿⣿'
+      ' ⠠⣿⣿⢿⣿⣷⣤⣨⣽⣿⣿⠿⠋⣿⣿ ⣿⣿⣧⣾⣿⡟'
+      '  ⣿⣿⣆⠉⠛⢿⡿⠟⠋⣁⣴⣾⣿⡿ ⣿⣿⣿⡿⠋ '
+      '  ⠈⢿⣿⣿⣦⣤⣤⣶⣿⣿⠿⠛⠉⢀⣼⣿⡿    '
+      '    ⠈⠛⠛⠛⠿⢻⣿⣿⣷⣶⣾⣿⣿⠟     '
+      '          ⠈⠉⠛⠛⠋⠉       '
+    ) ;;
+    42) ART_X=10; ART_Y=1; ART=(
+      '       ⢀⣀⣀⣀⣀           '
+      '    ⢀⣴⣾⣿⡿⠿⢿⣿⣷⣶⣶⣶⣶⣤⣀    '
+      '   ⢀⣾⣿⠟⢁⣠⣴⣿⣿⠟⢋⣉⠙⠛⢿⣿⣷⡀  '
+      ' ⣴⣾⣿⣿⣿ ⣿⣿⠛⣉⣤⣶⣿⣿⣿⣦⣌⣻⣿⣇  '
+      '⣼⣿⡟⢹⣿⣿ ⣿⣿⣾⣿⣿⣿⣧⣄⡙⠻⢿⣿⣿⣧  '
+      '⣿⣿⡅⢸⣿⣿⡀⣿⣿⠉  ⠉⣿⣿⣿⣷⣦⡈⢻⣿⣷ '
+      '⢻⣿⣷⣌⠛⢿⣿⣿⣿⣀  ⣀⣿⣿⠈⢹⣿⡇ ⣿⣿⡇'
+      ' ⢹⣿⣿⣷⣦⣌⠙⢿⣿⣿⣿⣿⢿⣿ ⢸⣿⡇⣰⣿⣿⠁'
+      ' ⢸⣿⣿⠙⠻⣿⣿⣿⡿⠛⢉⣠⣾⣿ ⢸⣿⣿⣿⡿⠃ '
+      '  ⠻⣿⣿⣦⣄⣉⣡⣴⣾⣿⡿⠟⠋⢠⣿⣿⠏⠁   '
+      '   ⠈⠛⠿⠿⠿⠿⣿⣿⣷⣶⣴⣾⣿⡿⠋     '
+      '          ⠉⠛⠛⠛⠛⠉       '
+    ) ;;
+    41) ART_X=9; ART_Y=1; ART=(
+      '        ⣀⣀⣀⣀⡀          '
+      '     ⢠⣶⣿⣿⠿⠿⣿⣿⣶⣶⣶⣶⣦⣄    '
+      '    ⣠⣿⣿⠋⣀⣤⣾⣿⡿⠛⣉⠉⠛⢿⣿⣷⡄  '
+      ' ⢀⣴⣿⣿⣿⡇⢸⣿⡿⢋⣡⣴⣾⣿⣿⣶⣤⣹⣿⣷  '
+      '⢀⣿⣿⠏⢹⣿⡇⢸⣿⣷⣿⣿⣿⣿⣤⣉⠛⠿⣿⣿⣿⡀ '
+      '⢸⣿⣿ ⢸⣿⣇⢸⣿⡏⠁ ⠈⢹⣿⣿⣷⣶⣄⠛⣿⣿⡀'
+      ' ⢿⣿⣧⡘⠻⢿⣿⣿⣇⡀ ⢀⣸⣿⡇⠙⣿⣿ ⢹⣿⡇'
+      '  ⣻⣿⣿⣷⣤⣉⠛⣿⣿⣿⣿⣿⣿⡇ ⣿⣿⢠⣿⣿⠇'
+      '  ⢹⣿⣏⠙⠿⣿⣿⣿⠟⠋⣁⣼⣿⡇⢀⣿⣿⣿⡿⠏ '
+      '  ⠈⢿⣿⣷⣤⣀⣉⣤⣶⣿⣿⠿⠛⠁⣼⣿⡟⠉   '
+      '    ⠙⠻⠿⠿⠿⢿⣿⣿⣶⣦⣶⣿⣿⠟     '
+      '          ⠈⠙⠛⠛⠛⠋       '
+    ) ;;
+    40) ART_X=9; ART_Y=1; ART=(
+      '       ⢀⣀⣀⣀⣀          '
+      '     ⣠⣾⣿⣿⠿⢿⣿⣷⣶⣶⣶⣶⣤⡀   '
+      '   ⢀⣰⣿⡟⢁⣠⣴⣿⣿⠟⢋⡉⠙⠻⣿⣿⣆  '
+      ' ⣠⣾⣿⣿⣿ ⣾⣿⠟⣉⣤⣾⣿⣿⣷⣦⣌⣿⣿⡀ '
+      '⢠⣿⣿⠋⣿⣿ ⣿⣿⣾⣿⣿⣿⣧⣌⡙⠻⢿⣿⣿⡅ '
+      '⢸⣿⡇ ⣿⣿⣀⣿⣿⠉  ⠉⣿⣿⣿⣶⣤⠙⣿⣿⡆'
+      '⠘⣿⣿⣄⠙⠿⣿⣿⣿⣀  ⣀⣿⣿⠈⣿⣿ ⢸⣿⣿'
+      ' ⠈⣿⣿⣿⣶⣌⡙⢻⣿⣿⣿⣿⣿⣿ ⣿⣿⣀⣼⣿⡏'
+      '  ⣿⣿⡍⠻⢿⣿⣿⡿⠛⢉⣠⣿⣿ ⣿⣿⣿⣿⠟ '
+      '  ⠘⣿⣿⣦⣄⣈⣡⣴⣾⣿⡿⠛⠋⣠⣿⣿⠋⠁  '
+      '   ⠈⠙⠻⠿⠿⠿⣿⣿⣷⣦⣴⣾⣿⡿⠃    '
+      '          ⠉⠛⠛⠛⠋⠁      '
+    ) ;;
+  esac
+  ART_HEIGHT=${#ART[@]}
+  ART_WIDTH=${#ART[0]}
+}
 
-# Reveal phases a-x move clockwise in 24 steps (4 steps per sextant).
-PHASES=(
-  '        wwwxxxaa            '
-  '      vvwwwxxxaaabbbccc     '
-  '     vvv   wxxaab   cccdd   '
-  '  uuuuu  vwwx  abbccc  ddd  '
-  ' ttttuu  vv wxabbccddddeee  '
-  'sss  tt  uuvwxabcdde  eeef  '
-  'sss  sss st      efffff fff '
-  ' rrr rrrrrq      hg ggg  ggg'
-  '  rqqqq qpponmlkjii  hh  ggg'
-  '  qqqppppoonnmlk jj  iihhhh '
-  '  ppp  ooonnm  lkkj  iiiii  '
-  '   ppooo   nmmllk   jjj     '
-  '     ooonnnmmmlllkkkjj      '
-  '            mmlllkkk        '
-)
-
-BASE=$(( (ROWS - 19) / 2 + 1 ))
-LEFT=$(( (COLS - 28) / 2 + 1 ))
 TITLE='OpenAI Codex'
 HINT='press any key to skip'
-TITLE_ROW=$(( BASE + 15 ))
-TITLE_COL=$(( (COLS - ${#TITLE}) / 2 + 1 ))
+ORIGINAL_SUB=$PWD
+[[ $ORIGINAL_SUB == "$HOME" ]] && ORIGINAL_SUB='~'
+[[ $ORIGINAL_SUB == "$HOME/"* ]] && ORIGINAL_SUB="~/${ORIGINAL_SUB#"$HOME/"}"
+ORIGINAL_SUB=${ORIGINAL_SUB//[[:cntrl:]]/}
 
-SUB=$PWD
-[[ $SUB == "$HOME" ]] && SUB='~'
-[[ $SUB == "$HOME/"* ]] && SUB="~/${SUB#"$HOME/"}"
-SUB=${SUB//[[:cntrl:]]/}
-# Use GNU wc -L for accurate terminal display width on multibyte paths.
-SUB_WIDTH=$(printf '%s' "$SUB" | wc -L)
-if (( SUB_WIDTH > COLS - 6 )); then
-  SUB=${SUB: -$(( COLS - 7 ))}
-  while (( $(printf '%s' "$SUB" | wc -L) > COLS - 7 )); do
-    SUB=${SUB:1}
-  done
-  SUB="…$SUB"
+prepare_layout() {
+  local row col stage glyph phase color last_color frame position
+  load_art
+  BASE=$(( STAGE_TOP + ART_Y + 1 ))
+  LEFT=$(( (COLS - STAGE_WIDTH) / 2 + ART_X + 1 ))
+  TITLE_ROW=$(( BASE + ART_HEIGHT + 1 ))
+  TITLE_COL=$(( (COLS - ${#TITLE}) / 2 + 1 ))
+  HINT_ROW=$(( TITLE_ROW + 3 ))
+  HINT_COL=$(( (COLS - ${#HINT}) / 2 + 1 ))
+  SUB=$ORIGINAL_SUB
   SUB_WIDTH=$(printf '%s' "$SUB" | wc -L)
-fi
-SUB_COL=$(( (COLS - SUB_WIDTH) / 2 + 1 ))
+  if (( SUB_WIDTH > COLS - 6 )); then
+    SUB=${SUB: -$(( COLS - 7 ))}
+    while (( $(printf '%s' "$SUB" | wc -L) > COLS - 7 )); do
+      SUB=${SUB:1}
+    done
+    SUB="…$SUB"
+    SUB_WIDTH=$(printf '%s' "$SUB" | wc -L)
+  fi
+  SUB_COL=$(( (COLS - SUB_WIDTH) / 2 + 1 ))
+
+  # Derive the clockwise reveal from the current stage, so every native
+  # size gets the same 24-step animation without resampling Braille cells.
+  mapfile -t PHASES < <(LC_ALL=C awk -v w="$ART_WIDTH" -v h="$ART_HEIGHT" 'BEGIN {
+    pi = atan2(0, -1)
+    alphabet = "abcdefghijklmnopqrstuvwx"
+    for (r = 0; r < h; r++) {
+      for (c = 0; c < w; c++) {
+        angle = atan2(c + 0.5 - w / 2, (h / 2 - r - 0.5) * 2)
+        if (angle < 0) angle += 2 * pi
+        printf "%s", substr(alphabet, int(angle / (2 * pi) * 24) + 1, 1)
+      }
+      printf "\n"
+    }
+  }')
+  FRAMES=()
+  for (( stage = 0; stage < 24; stage++ )); do
+    frame=$'\e[?2026h'
+    for (( row = 0; row < ART_HEIGHT; row++ )); do
+      printf -v position '\e[%d;%dH' "$((BASE + row))" "$LEFT"
+      frame+=$position
+      last_color=''
+      for (( col = 0; col < ART_WIDTH; col++ )); do
+        glyph=${ART[row]:col:1}
+        phase=${PHASES[row]:col:1}
+        if [[ $glyph == ' ' ]] || (( phase_index[$phase] > stage )); then
+          frame+=' '
+        else
+          color=$WHITE
+          (( stage - phase_index[$phase] < 4 )) && color=$TEAL
+          if [[ $color != "$last_color" ]]; then
+            frame+=$color
+            last_color=$color
+          fi
+          frame+=$glyph
+        fi
+      done
+    done
+    FRAMES+=("$frame$RESET"$'\e[?2026l')
+  done
+}
 
 declare -A phase_index
 alphabet=abcdefghijklmnopqrstuvwx
@@ -112,35 +478,9 @@ for (( i = 0; i < 24; i++ )); do
   phase_index[${alphabet:i:1}]=$i
 done
 
-# Pre-render each frame so playback emits one write per frame without flicker.
-FRAMES=()
-for (( stage = 0; stage < 24; stage++ )); do
-  frame=$'\e[?2026h'
-  for (( row = 0; row < 14; row++ )); do
-    printf -v position '\e[%d;%dH' "$((BASE + row))" "$LEFT"
-    frame+=$position
-    last_color=''
-    for (( col = 0; col < 28; col++ )); do
-      glyph=${ART[row]:col:1}
-      phase=${PHASES[row]:col:1}
-      if [[ $phase == ' ' ]] || (( phase_index[$phase] > stage )); then
-        frame+=' '
-      else
-        color=$WHITE
-        (( stage - phase_index[$phase] < 4 )) && color=$TEAL
-        if [[ $color != "$last_color" ]]; then
-          frame+=$color
-          last_color=$color
-        fi
-        frame+=$glyph
-      fi
-    done
-  done
-  FRAMES+=("$frame$RESET"$'\e[?2026l')
-done
-
 OLD_STTY=$(stty -g 2>/dev/null) || exit 0
 screen_active=0
+resize_pending=0
 cleanup() {
   stty "$OLD_STTY" 2>/dev/null
   (( screen_active )) && printf '%s' $'\e[?2026l\e[0m\e[?25h\e[?1049l'
@@ -150,11 +490,49 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
-trap 'exit 0' WINCH
+trap 'resize_pending=1' WINCH
 
 stty -echo -icanon min 1 time 0 2>/dev/null || exit 0
 screen_active=1
 printf '%s' $'\e[?1049h\e[?25l\e[2J'
+
+current_stage=0
+current_color=''
+title_length=0
+sub_visible=0
+
+draw_complete() {
+  local row out=$'\e[?2026h' position
+  for (( row = 0; row < ART_HEIGHT; row++ )); do
+    printf -v position '\e[%d;%dH' "$((BASE + row))" "$LEFT"
+    out+="$position$1${ART[row]}"
+  done
+  printf '%s' "$out$RESET"$'\e[?2026l'
+}
+
+refresh_layout() {
+  # A resize can arrive during frame preparation. Recheck before emitting
+  # coordinates, avoiding stale frames and terminal scrolling while dragging.
+  while :; do
+    resize_pending=0
+    measure_stage || exit 0
+    prepare_layout
+    (( resize_pending )) || break
+  done
+  printf '%s' $'\e[?2026h\e[2J'
+  printf '\e[%d;%dH%s%s%s' "$HINT_ROW" "$HINT_COL" "$DIM" "$HINT" "$RESET"
+  if (( title_length )); then
+    printf '\e[%d;%dH%s%s%s' "$TITLE_ROW" "$TITLE_COL" "$BOLD$WHITE" "${TITLE:0:title_length}" "$RESET"
+  fi
+  if (( sub_visible )); then
+    printf '\e[%d;%dH%s%s%s' "$((TITLE_ROW + 1))" "$SUB_COL" "$DIM" "$SUB" "$RESET"
+  fi
+  if [[ -n $current_color ]]; then
+    draw_complete "$current_color"
+  else
+    printf '%s' "${FRAMES[current_stage]}"
+  fi
+}
 
 pause() {
   local key prefix rest i
@@ -170,33 +548,28 @@ pause() {
     fi
     exit 0
   fi
+  (( resize_pending )) && refresh_layout
+  return 0
 }
 
-draw_complete() {
-  local row out=$'\e[?2026h' position
-  for (( row = 0; row < 14; row++ )); do
-    printf -v position '\e[%d;%dH' "$((BASE + row))" "$LEFT"
-    out+="$position$1${ART[row]}"
-  done
-  printf '%s' "$out$RESET"$'\e[?2026l'
-}
-
-printf '\e[%d;%dH%s%s%s' "$(( BASE + 18 ))" "$(( (COLS - ${#HINT}) / 2 + 1 ))" "$DIM" "$HINT" "$RESET"
-for frame in "${FRAMES[@]}"; do
-  printf '%s' "$frame"
+refresh_layout
+for (( current_stage = 0; current_stage < 24; current_stage++ )); do
+  printf '%s' "${FRAMES[current_stage]}"
   pause "$FRAME_DELAY"
 done
+current_stage=23
 
-for color in "$WHITE" "$SOFT" "$WHITE"; do
-  draw_complete "$color"
+for current_color in "$WHITE" "$SOFT" "$WHITE"; do
+  draw_complete "$current_color"
   pause "$PULSE_DELAY"
 done
 
-for (( i = 1; i <= ${#TITLE}; i++ )); do
-  printf '\e[%d;%dH%s%s%s' "$TITLE_ROW" "$TITLE_COL" "$BOLD$WHITE" "${TITLE:0:i}" "$RESET"
+for (( title_length = 1; title_length <= ${#TITLE}; title_length++ )); do
+  printf '\e[%d;%dH%s%s%s' "$TITLE_ROW" "$TITLE_COL" "$BOLD$WHITE" "${TITLE:0:title_length}" "$RESET"
   pause "$TYPE_DELAY"
 done
 
+sub_visible=1
 printf '\e[%d;%dH%s%s%s' "$((TITLE_ROW + 1))" "$SUB_COL" "$DIM" "$SUB" "$RESET"
 pause "$HOLD_DELAY"
 
