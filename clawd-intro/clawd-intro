@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# clawd-intro — Play a short Clawd greeting animation before starting Claude Code.
+#   Press any key to skip; Ctrl-C cancels startup.
+#   CLAWD_NO_INTRO=1 disables the animation; CLAWD_INTRO_SPEED=2 plays at 2x speed.
+
+[[ -t 0 && -t 1 && -z ${CLAWD_NO_INTRO:-} ]] || exit 0
+[[ -n ${TERM:-} && $TERM != dumb ]] || exit 0
+
+read -r ROWS COLS < <(stty size 2>/dev/null)
+ROWS=${ROWS:-24}
+COLS=${COLS:-80}
+(( COLS >= 30 && ROWS >= 10 )) || exit 0
+
+RESET=$'\e[0m'
+BOLD=$'\e[1m'
+if [[ -n ${NO_COLOR:-} ]]; then
+  ORANGE=$'\e[39m'
+  DIM=$'\e[2m'
+elif [[ ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit ]]; then
+  ORANGE=$'\e[38;2;215;119;87m'
+  DIM=$'\e[38;2;136;136;136m'
+else
+  ORANGE=$'\e[38;5;173m'
+  DIM=$'\e[38;5;244m'
+fi
+
+SPEED=${CLAWD_INTRO_SPEED:-1}
+
+OLD_STTY=$(stty -g 2>/dev/null)
+cleanup() {
+  [[ -n $OLD_STTY ]] && stty "$OLD_STTY" 2>/dev/null
+  # Show cursor and leave alternate screen.
+  printf '%s' "$RESET"$'\e[?25h\e[?1049l'
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+# Enter alternate screen, hide cursor, and clear screen.
+printf '\e[?1049h\e[?25l\e[2J'
+stty -echo -icanon 2>/dev/null
+
+# Wait $1 seconds; exit immediately if any key is pressed.
+pause() {
+  local t
+  t=$(awk -v a="$1" -v s="$SPEED" 'BEGIN { printf "%.3f", a / (s > 0 ? s : 1) }')
+  if read -rsn1 -t "$t" _; then
+    exit 0
+  fi
+}
+
+# Clawd pixel sprites.
+EYES_OPEN=' ▐▛███▜▌ '
+EYES_SHUT=' ▐█████▌ '
+BODY='▝▜█████▛▘'
+LEGS_A='  ▘▘ ▝▝  '
+LEGS_B='  ▝▝ ▘▘  '
+W=9
+
+BLOCK_H=6                        # 3 rows for Clawd + blank line + title + subtitle
+BASE=$(( (ROWS - BLOCK_H) / 2 + 1 ))
+CX=$(( (COLS - W) / 2 + 1 ))     # Final resting column
+
+# draw <x> <y> <eyes> <legs>
+draw() {
+  local x=$1 y=$2 eyes=$3 legs=$4 r
+  # Use synchronized output to prevent flicker.
+  local out=$'\e[?2026h'
+  for r in $((BASE - 1)) $BASE $((BASE + 1)) $((BASE + 2)); do
+    out+=$'\e['"$r"$';1H\e[2K'
+  done
+  out+=$'\e['"$y;$x"'H'"$ORANGE$eyes"
+  out+=$'\e['"$((y + 1));$x"'H'"$BODY"
+  out+=$'\e['"$((y + 2));$x"'H'"$legs$RESET"
+  out+=$'\e[?2026l'
+  printf '%s' "$out"
+}
+
+# 1) Walk in from the left (ease-out).
+N=16
+for (( i = 0; i <= N; i++ )); do
+  x=$(( 1 + (CX - 1) * (N * N - (N - i) * (N - i)) / (N * N) ))
+  (( i % 2 )) && legs=$LEGS_B || legs=$LEGS_A
+  draw "$x" "$BASE" "$EYES_OPEN" "$legs"
+  pause 0.05
+done
+draw "$CX" "$BASE" "$EYES_OPEN" "$LEGS_A"
+pause 0.18
+
+# 2) Blink.
+draw "$CX" "$BASE" "$EYES_SHUT" "$LEGS_A"
+pause 0.12
+draw "$CX" "$BASE" "$EYES_OPEN" "$LEGS_A"
+pause 0.15
+
+# 3) Small hop.
+draw "$CX" $((BASE - 1)) "$EYES_OPEN" "$LEGS_B"
+pause 0.12
+draw "$CX" "$BASE" "$EYES_OPEN" "$LEGS_A"
+pause 0.10
+
+# 4) Type out the title.
+TITLE='✻ Claude Code'
+TROW=$(( BASE + 4 ))
+TCOL=$(( (COLS - ${#TITLE}) / 2 + 1 ))
+for (( i = 1; i <= ${#TITLE}; i++ )); do
+  printf '\e[%d;%dH%s%s%s' "$TROW" "$TCOL" "$BOLD$ORANGE" "${TITLE:0:i}" "$RESET"
+  pause 0.03
+done
+
+# 5) Subtitle: current working directory.
+SUB=${PWD/#$HOME/\~}
+(( ${#SUB} > COLS - 4 )) && SUB="…${SUB: -$((COLS - 5))}"
+printf '\e[%d;%dH%s%s%s' $((TROW + 1)) $(( (COLS - ${#SUB}) / 2 + 1 )) "$DIM" "$SUB" "$RESET"
+pause 0.55
+
+exit 0
