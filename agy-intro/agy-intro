@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# agy-intro — Play the levitating-delta animation before starting Antigravity CLI.
+#   Press any key to skip; Ctrl-C cancels startup.
+#   AGY_NO_INTRO=1 disables the animation; AGY_INTRO_SPEED=2 plays at 2x speed.
+#   Uses Unicode Braille art; no image protocol required.
+
+[[ -t 0 && -t 1 && -z ${AGY_NO_INTRO:-} ]] || exit 0
+[[ -n ${TERM:-} && $TERM != dumb ]] || exit 0
+intro_locale=${LC_ALL:-${LC_CTYPE:-${LANG:-}}}
+[[ ${intro_locale,,} == *utf*8* ]] || exit 0
+
+read -r ROWS COLS < <(stty size 2>/dev/null)
+[[ $ROWS =~ ^[0-9]+$ && $COLS =~ ^[0-9]+$ ]] || exit 0
+(( ROWS >= 21 && COLS >= 36 )) || exit 0
+
+RESET=$'\e[0m'
+BOLD=$'\e[1m'
+if [[ -n ${NO_COLOR:-} ]]; then
+  WHITE=$'\e[39m'
+  CYAN=$'\e[39m'
+  SOFT=$'\e[39m'
+  DIM=$'\e[2m'
+elif [[ ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit ]]; then
+  WHITE=$'\e[38;2;232;240;254m'
+  CYAN=$'\e[38;2;90;200;250m'
+  SOFT=$'\e[38;2;138;180;248m'
+  DIM=$'\e[38;2;134;144;162m'
+else
+  WHITE=$'\e[38;5;255m'
+  CYAN=$'\e[38;5;75m'
+  SOFT=$'\e[38;5;111m'
+  DIM=$'\e[38;5;245m'
+fi
+
+SPEED=${AGY_INTRO_SPEED:-1}
+[[ $SPEED =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || SPEED=1
+
+# Precompute all frame delays once to avoid spawning awk on every frame.
+read -r FRAME_DELAY HOVER_DELAY TYPE_DELAY HOLD_DELAY < <(
+  LC_ALL=C awk -v speed="$SPEED" 'BEGIN {
+    if (!(speed > 0)) speed = 1
+    split("0.032 0.11 0.025 0.48", delay)
+    for (i = 1; i <= 4; i++) {
+      t = delay[i] / speed
+      printf "%.4f%s", (t < 0.001 ? 0.001 : t), (i == 4 ? "\n" : " ")
+    }
+  }'
+)
+[[ -n $HOLD_DELAY ]] || exit 0
+
+ART=(
+  '            ⢀⣀⣀⡀            '
+  '           ⢀⣾⣿⣿⣷⡀           '
+  '          ⢀⣾⣿⣿⣿⣿⣷⡀          '
+  '         ⢀⣾⣿⣿⣿⣿⣿⣿⣷⡀         '
+  '        ⢀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀        '
+  '        ⣼⣿⣿⣿⡿⠁⠈⢿⣿⣿⣿⣧        '
+  '       ⣼⣿⣿⣿⣿⠃⣀⣀⠘⣿⣿⣿⣿⣧       '
+  '      ⣸⣿⣿⣿⣿⠃⣾⣿⣿⣷⠘⣿⣿⣿⣿⣇      '
+  '     ⣰⣿⣿⣿⣿⠇ ⣿⣿⣿⣿ ⠸⣿⣿⣿⣿⣆     '
+  '    ⢠⣿⣿⣿⣿⡏  ⠈⠛⠛⠁  ⢹⣿⣿⣿⣿⡄    '
+  '   ⢠⣿⣿⣿⣿⡿          ⢿⣿⣿⣿⣿⡄   '
+  '  ⢀⣾⣿⣿⣿⣿⠁          ⠈⣿⣿⣿⣿⣷⡀  '
+  '  ⣾⣿⣿⣿⣿⠇            ⠸⣿⣿⣿⣿⣷  '
+  '                            '
+)
+
+# Reveal phases a-x sweep upward from base to apex and ignite the inner core.
+PHASES=(
+  '            uuuu            '
+  '           tsssst           '
+  '          rrrrrrrr          '
+  '         qppppppppq         '
+  '        oooonnnnoooo        '
+  '        mmmmmmmmmmmm        '
+  '       lllkvvuuvvklll       '
+  '      jjjjjuuttuujjjjj      '
+  '     iiihhh tsst hhhiii     '
+  '    gggggg  srrs  gggggg    '
+  '   fffeee          eeefff   '
+  '  ddddddc          cdddddd  '
+  '  ccbbbb            bbbbcc  '
+  '                            '
+)
+
+BASE=$(( (ROWS - 19) / 2 + 1 ))
+LEFT=$(( (COLS - 28) / 2 + 1 ))
+TITLE='Antigravity CLI'
+HINT='press any key to skip'
+TITLE_ROW=$(( BASE + 15 ))
+TITLE_COL=$(( (COLS - ${#TITLE}) / 2 + 1 ))
+
+SUB=$PWD
+[[ $SUB == "$HOME" ]] && SUB='~'
+[[ $SUB == "$HOME/"* ]] && SUB="~/${SUB#"$HOME/"}"
+SUB=${SUB//[[:cntrl:]]/}
+# Use GNU wc -L for accurate terminal display width on multibyte paths.
+SUB_WIDTH=$(printf '%s' "$SUB" | wc -L)
+if (( SUB_WIDTH > COLS - 6 )); then
+  SUB=${SUB: -$(( COLS - 7 ))}
+  while (( $(printf '%s' "$SUB" | wc -L) > COLS - 7 )); do
+    SUB=${SUB:1}
+  done
+  SUB="…$SUB"
+  SUB_WIDTH=$(printf '%s' "$SUB" | wc -L)
+fi
+SUB_COL=$(( (COLS - SUB_WIDTH) / 2 + 1 ))
+
+declare -A phase_index
+alphabet=abcdefghijklmnopqrstuvwx
+for (( i = 0; i < 24; i++ )); do
+  phase_index[${alphabet:i:1}]=$i
+done
+
+# Pre-render each frame so playback emits one write per frame without flicker.
+FRAMES=()
+for (( stage = 0; stage < 24; stage++ )); do
+  frame=$'\e[?2026h'
+  for (( row = 0; row < 14; row++ )); do
+    printf -v position '\e[%d;%dH' "$((BASE + row))" "$LEFT"
+    frame+=$position
+    last_color=''
+    for (( col = 0; col < 28; col++ )); do
+      glyph=${ART[row]:col:1}
+      phase=${PHASES[row]:col:1}
+      if [[ $phase == ' ' ]] || (( phase_index[$phase] > stage )); then
+        frame+=' '
+      else
+        color=$WHITE
+        (( stage - phase_index[$phase] < 4 )) && color=$CYAN
+        if [[ $color != "$last_color" ]]; then
+          frame+=$color
+          last_color=$color
+        fi
+        frame+=$glyph
+      fi
+    done
+  done
+  FRAMES+=("$frame$RESET"$'\e[?2026l')
+done
+
+OLD_STTY=$(stty -g 2>/dev/null) || exit 0
+screen_active=0
+cleanup() {
+  stty "$OLD_STTY" 2>/dev/null
+  (( screen_active )) && printf '%s' $'\e[?2026l\e[0m\e[?25h\e[?1049l'
+  return 0
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'exit 0' WINCH
+
+stty -echo -icanon min 1 time 0 2>/dev/null || exit 0
+screen_active=1
+printf '%s' $'\e[?1049h\e[?25l\e[2J'
+
+pause() {
+  local key prefix rest i
+  if IFS= read -rsn1 -t "$1" key; then
+    # Drain arrow-key escape sequences so leftover bytes do not leak into agy.
+    if [[ $key == $'\e' ]]; then
+      if IFS= read -rsn1 -t 0.008 prefix && [[ $prefix == '[' || $prefix == O ]]; then
+        for (( i = 0; i < 16; i++ )); do
+          IFS= read -rsn1 -t 0.008 rest || break
+          [[ $rest == [a-zA-Z~] ]] && break
+        done
+      fi
+    fi
+    exit 0
+  fi
+}
+
+draw_at() {
+  local base_row=$1 color=$2 row out=$'\e[?2026h' position
+  # Clear one row above and below the 14-row canvas so vertical hover leaves no trails.
+  for row in $((BASE - 1)) $((BASE + 13)); do
+    printf -v position '\e[%d;%dH\e[2K' "$row" 1
+    out+=$position
+  done
+  for (( row = 0; row < 14; row++ )); do
+    printf -v position '\e[%d;%dH' "$((base_row + row))" "$LEFT"
+    out+="$position$color${ART[row]}"
+  done
+  printf '%s' "$out$RESET"$'\e[?2026l'
+}
+
+printf '\e[%d;%dH%s%s%s' "$(( BASE + 18 ))" "$(( (COLS - ${#HINT}) / 2 + 1 ))" "$DIM" "$HINT" "$RESET"
+for frame in "${FRAMES[@]}"; do
+  printf '%s' "$frame"
+  pause "$FRAME_DELAY"
+done
+
+# Brief weightless hover upward and settle back into rest.
+draw_at "$((BASE - 1))" "$SOFT"
+pause "$HOVER_DELAY"
+draw_at "$BASE" "$WHITE"
+pause "$HOVER_DELAY"
+
+for (( i = 1; i <= ${#TITLE}; i++ )); do
+  printf '\e[%d;%dH%s%s%s' "$TITLE_ROW" "$TITLE_COL" "$BOLD$WHITE" "${TITLE:0:i}" "$RESET"
+  pause "$TYPE_DELAY"
+done
+
+printf '\e[%d;%dH%s%s%s' "$((TITLE_ROW + 1))" "$SUB_COL" "$DIM" "$SUB" "$RESET"
+pause "$HOLD_DELAY"
+
+exit 0
